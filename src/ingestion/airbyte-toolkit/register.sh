@@ -165,7 +165,7 @@ if [[ "${1:-}" == "--all" ]]; then
   errors=0
   while IFS= read -r -d '' desc; do
     connector_dir=$(dirname "$desc")
-    connector="${connector_dir#${CONNECTORS_DIR}/}"
+    connector="${connector_dir#"${CONNECTORS_DIR}/"}"
     echo "  Registering connector: $connector"
     if ! upload_connector "$connector"; then
       echo "  ERROR: failed to register $connector (continuing...)" >&2
