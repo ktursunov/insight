@@ -389,3 +389,7 @@ frontend:
   oidc:
     issuer: ""
     clientId: ""
+    # Space-separated OIDC scopes. IdP-specific (Entra wants
+    # api://<clientId>/Access.Default; Okta uses bare names).
+    # Required when issuer/clientId are set.
+    scopes: ""
