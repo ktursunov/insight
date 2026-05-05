@@ -147,7 +147,7 @@ PYTHON
 
   # Save definition ID to state at definitions.<connector_name>.id
   local def_id
-  def_id=$(echo "$output" | grep "^  DEF_ID:" | tail -1 | cut -d: -f2)
+  def_id=$(awk -F: '/^  DEF_ID:/ { d=$2 } END { print d }' <<<"$output")
   if [[ -n "$def_id" ]]; then
     state_set "definitions.${name}.id" "$def_id"
   fi
