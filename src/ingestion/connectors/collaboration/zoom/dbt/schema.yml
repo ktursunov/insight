@@ -10,7 +10,12 @@ sources:
 
 models:
   - name: zoom__collab_meeting_activity
-    description: "Zoom meeting activity aggregated per user per day → staging, feeds class_collab_meeting_activity"
+    description: >
+      Zoom meeting activity aggregated per user per day → staging, feeds
+      class_collab_meeting_activity. Sessions sharing the same Zoom Meeting
+      ID with end-of-prev → start-of-next gap ≤ 15 min are stitched into a
+      single logical meeting before counting (issue #258), so host
+      disconnect/reconnect bursts no longer inflate `meetings_attended`.
     columns:
       - name: tenant_id
         tests:
@@ -28,3 +33,11 @@ models:
       - name: date
         tests:
           - not_null
+      - name: meetings_attended
+        description: >
+          Distinct logical meetings the user attended on this day. Computed
+          as `uniqExact(logical_meeting_id)` over participant rows, where
+          `logical_meeting_id` clusters consecutive sessions sharing the
+          same Zoom Meeting ID with inter-session gap ≤ 15 min — this
+          collapses host-drop rejoins. Recurring meetings reusing the same
+          ID across days remain separate logical meetings.
