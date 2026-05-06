@@ -77,6 +77,12 @@ apiGateway:
   # Use ExternalSecrets / sealed-secrets / SOPS of your choice.
   oidc:
     existingSecret: insight-oidc
+    # If you let the chart render its own Secret (existingSecret unset),
+    # set scopes here (space-separated, IdP-specific, e.g.
+    # "openid profile email api://<clientId>/Access.Default" for Entra).
+    # When using existingSecret, instead populate the secret with key
+    # APP__modules__auth-info__config__scopes alongside the issuer/clientId/redirect_uri.
+    scopes: ""
 
   ingress:
     enabled: true

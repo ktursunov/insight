@@ -306,6 +306,9 @@ apiGateway:
     audience: ""                # MUST be set (e.g. "api://insight")
     clientId: ""
     redirectUri: ""
+    # Space-separated OIDC scopes; IdP-specific (Entra wants
+    # api://<clientId>/Access.Default; Okta uses bare names).
+    scopes: ""
 
   authDisabled: false           # true = disable auth (LOCAL DEV ONLY)
 
