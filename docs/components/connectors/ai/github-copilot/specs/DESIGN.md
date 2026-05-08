@@ -45,7 +45,7 @@ One `AbstractSource` (`SourceGitHubCopilot`) exposes three streams:
 
 Two dbt Silver models are defined alongside the connector. Both follow the project-wide ADR-0001 staging pattern (`engine='ReplacingMergeTree(_version)'`, `order_by=['unique_key']`, `incremental_strategy='append'`, `_version` column projected from `_airbyte_extracted_at`).
 
-- `copilot__ai_dev_usage` — Bronze `copilot_user_metrics` joined with `copilot_seats` to resolve `user_login` → `user_email`. Feeds the existing `class_ai_dev_usage` Silver class with `tool='copilot'`, `source='copilot'`. Activation requires extending `silver/ai/schema.yml` with three boolean columns (`used_chat_today`, `used_agent_today`, `used_cli_today`) — Copilot-specific signals not produced by Cursor/Claude Code; existing rows from those staging models will leave them NULL.
+- `copilot__ai_dev_usage` — Bronze `copilot_user_metrics` joined with `copilot_seats` to resolve `user_login` → `user_email`. Feeds the existing `class_ai_dev_usage` Silver class with `tool='copilot'`, `source='copilot'`. **Activated** in this PR — `silver/ai/schema.yml` `tool` and `source` enums extended with `'copilot'`. Boolean activity flags (`used_chat`, `used_agent`, `used_cli`) are mapped without schema additions: `used_agent` / `used_chat` flow into `agent_sessions` / `chat_requests` as 1-markers; `used_cli` is preserved together with the other two as a JSON object in `tool_action_breakdown_json`.
 - `copilot__ai_org_usage` — Bronze `copilot_org_metrics` → `class_ai_org_usage`. **Deferred**: `class_ai_org_usage` Silver class is not yet created — Copilot is its first contributor. Staging model is present, tagged `silver:class_ai_org_usage`, and includes `{{ config(enabled=false) }}` until the class is created in a coordinated PR. When activated, MUST also follow the ADR-0001 pattern.
 
 #### System Context
@@ -262,7 +262,7 @@ The `descriptor.yaml` at `src/ingestion/connectors/ai/github-copilot/descriptor.
 | Field | Value | Purpose |
 |-------|-------|---------|
 | `schedule` | `0 2 * * *` | Daily at 02:00 UTC |
-| `dbt_select` | `""` (empty) | Silver dbt models deferred to Phase 2; set to `tag:github-copilot+` when staging models ship |
+| `dbt_select` | `tag:github-copilot+` | Selects the connector's bronze→RMT bootstrap, the active `copilot__ai_dev_usage` staging, and the deferred `copilot__ai_org_usage` (the latter is `enabled=false` so it is skipped at compile-time) |
 | `workflow` | `sync` | Standard Airbyte sync workflow |
 | `connection.namespace` | `bronze_github_copilot` | Bronze destination namespace |
 
@@ -398,9 +398,21 @@ Reads from `copilot_user_metrics`; LEFT JOINs `copilot_seats` on `copilot_user_m
 
 The model **MUST** project a `_version` column (`toUnixTimestamp64Milli(_airbyte_extracted_at)`) so RMT background merges can dedupe deterministically.
 
-**Bronze deduplication**: Per ADR-0002, every Airbyte Bronze table should be RMT-promoted via a `<connector>__bronze_promoted` model. The Copilot connector defers this until the upstream `promote_bronze_to_rmt` macro is fixed for `Nullable(String)` `unique_key` columns (current upstream macro lacks `SETTINGS allow_nullable_key=1` in its CTAS — affects every Airbyte Bronze incl. Jira and Claude Enterprise). A dedicated GitHub issue **MUST** be filed under `cyberfabric/insight` to track the macro fix; the issue link is to be added here once filed. In the meantime, this staging model wraps its Bronze read with `LIMIT 1 BY tenant_id, source_id, user_login, day` (latest by `_airbyte_extracted_at`) to drop Airbyte re-emit duplicates. When the macro is fixed, replace the `LIMIT 1 BY` with a `-- depends_on: {{ ref('github_copilot__bronze_promoted') }}` reference.
+**Bronze deduplication**: Per ADR-0002, the connector ships `github_copilot__bronze_promoted.sql` which RMT-promotes the three Bronze tables (`copilot_seats`, `copilot_user_metrics`, `copilot_org_metrics`). The staging model carries a `-- depends_on: {{ ref('github_copilot__bronze_promoted') }}` header so dbt's DAG always materialises the bootstrap before the staging model reads Bronze. The `LIMIT 1 BY` defensive dedup is retained inside the staging CTE for safety during the first run before the RMT merge fires.
 
-**Silver class extension required for activation**: Three boolean columns must be added to `silver/ai/schema.yml` for `class_ai_dev_usage` before this staging model is enabled — `used_chat_today`, `used_agent_today`, `used_cli_today`. Existing Cursor and Claude Enterprise staging models will need a one-line addition each emitting these as `CAST(NULL AS Nullable(UInt8))` so UNION ALL types match. The `tool` and `source` enum `accepted_values` in `silver/ai/schema.yml` must also be extended with `'copilot'`.
+**Silver class extension applied**: The `tool` and `source` enum `accepted_values` in `silver/ai/schema.yml` are extended with `'copilot'`. No new boolean columns were added — `used_chat` / `used_agent` / `used_cli` are mapped without a schema change (see field mapping below).
+
+**Field mapping** (per gist proposal — AI providers metrics matrix):
+- `loc_added_sum` → `lines_added`
+- `loc_deleted_sum` → `lines_removed`
+- `code_generation_activity_count` → `tool_use_offered` (proxy: each generation event ≈ one offered suggestion; the v2 API does not split offered from rejected)
+- `code_acceptance_activity_count` → `tool_use_accepted` and `completions_count`
+- `used_agent` (boolean) → `agent_sessions = 1` if true else NULL
+- `used_chat` (boolean) → `chat_requests = 1` if true else NULL
+- `used_cli` (boolean) → packed into `tool_action_breakdown_json` together with the other two flags
+- `total_lines_added` / `total_lines_removed` → NULL (Copilot reports only AI-accepted lines, no view of manual keystrokes — same gap as Claude Code/Enterprise)
+- `commits_count` / `pull_requests_count` → NULL (per-user PR/commit attribution is org-level only in Copilot — see `copilot_org_metrics.pull_requests`)
+- `cost_cents` → NULL (Copilot is per-seat subscription, not metered)
 
 **NULL `user_email` policy**: The dbt model **MUST** filter `WHERE user_email IS NOT NULL` before writing to `class_ai_dev_usage`, since the Cursor and Claude Enterprise staging models contributing to the same Silver class assume a non-null `email` column. Rows where `user_login` has no matching seat (transient race condition — seat removed between seat fetch and metrics fetch) are dropped from Silver but retained in Bronze (`copilot_user_metrics`). Bronze rows recover automatically on the next seat roster sync once the user re-appears in `copilot_seats`. Tracked in PRD OQ-COP-1.
 

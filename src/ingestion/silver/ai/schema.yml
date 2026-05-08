@@ -5,7 +5,7 @@ models:
     description: >
       Unified per-person per-day AI developer tool usage across Cursor,
       Claude Code (from Claude Enterprise for Enterprise orgs; from Claude Admin
-      for Admin-only orgs), and future sources (Windsurf, Codex).
+      for Admin-only orgs), GitHub Copilot, and future sources (Windsurf, Codex).
       One row per (tenant, email, day, tool). Feeds Gold metrics:
       cursor_active / cc_active / active_ai_members / ai_tools / ai_sessions /
       cursor_acceptance / cc_tool_acceptance / cursor_completions /
@@ -56,7 +56,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['cursor', 'claude_code', 'windsurf', 'codex']
+                values: ['cursor', 'claude_code', 'copilot', 'windsurf', 'codex']
       - name: session_count
         description: "Sessions recorded on this day. For Cursor: 1 per active day (Cursor only exposes an is-active flag, not session counts)."
         tests:
@@ -124,12 +124,12 @@ models:
           Populated for Claude Enterprise only (claude_code_metrics_json from Bronze).
           NULL for Cursor (Cursor does not expose per-tool-type breakdown at daily grain).
       - name: source
-        description: "Staging-model discriminator: 'cursor' | 'claude_admin' | 'claude_enterprise' | future sources"
+        description: "Staging-model discriminator: 'cursor' | 'claude_admin' | 'claude_enterprise' | 'copilot' | future sources"
         tests:
           - not_null
           - accepted_values:
               arguments:
-                values: ['cursor', 'claude_admin', 'claude_enterprise', 'claude_playwright', 'windsurf', 'codex']
+                values: ['cursor', 'claude_admin', 'claude_enterprise', 'claude_playwright', 'copilot', 'windsurf', 'codex']
       - name: data_source
         description: "Framework source discriminator — 'insight_cursor' / 'insight_claude_admin' / etc."
         tests:
