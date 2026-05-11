@@ -54,5 +54,11 @@ FROM (
         'resync' AS _origin
     FROM {{ source('bronze_cursor', 'cursor_usage_events_daily_resync') }}
 ) AS u
-ORDER BY _airbyte_extracted_at DESC
+-- Tie-breaker on equal _airbyte_extracted_at: prefer the resync row so the
+-- finalized chargedCents wins deterministically. Otherwise the main row is
+-- already the only candidate (older history) or already loses on extraction
+-- time (resync extracted later).
+ORDER BY
+    _airbyte_extracted_at DESC,
+    (_origin = 'resync') DESC
 LIMIT 1 BY unique_key

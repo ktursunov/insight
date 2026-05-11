@@ -67,6 +67,11 @@ FROM {{ source('bronze_cursor', 'cursor_daily_usage') }}
 WHERE isActive = true
   AND email IS NOT NULL
   AND trim(email) != ''
+  -- Defensive: bronze can occasionally carry NULL `date`. Without this guard
+  -- CAST(NULL AS Int64) → 0 and fromUnixTimestamp64Milli(0) → 1970-01-01,
+  -- which silently corrupts the incremental boundary (max(day) gets stuck
+  -- at the epoch) and emits a phantom 1970 row into Silver.
+  AND date IS NOT NULL
 {% if is_incremental() %}
   AND toDate(fromUnixTimestamp64Milli(CAST(date AS Int64))) > (
       SELECT coalesce(max(day), toDate('1970-01-01')) - INTERVAL 3 DAY
