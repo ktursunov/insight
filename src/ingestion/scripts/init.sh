@@ -4,30 +4,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-export TOOLKIT_DIR="${SCRIPT_DIR}/../airbyte-toolkit"
-
-# ── Host preflight (FIRST executable step) ─────────────────────────────────
-# `ensure_tooling` runs before any cluster contact so a fresh-laptop
-# operator hits an actionable install hint immediately, not in the middle
-# of migrations. On macOS / WSL / Windows-native it auto-installs missing
-# tools; on native Linux it fails with platform-specific install commands
-# and the operator re-runs after `apt`/`dnf`/`pacman` etc. Toolkit sub-
-# scripts (register.sh, connect.sh, sync-flows.sh) call the same helper
-# so they work standalone too — second call is a no-op when init.sh has
-# already provisioned PATH and the port-forward.
-# shellcheck source=../airbyte-toolkit/lib/host-side-prerequisites.sh
-source "${TOOLKIT_DIR}/lib/host-side-prerequisites.sh"
-ensure_tooling
-
 # KUBECONFIG can be empty when running in-cluster.
+
+export RECONCILE_DIR="${SCRIPT_DIR}/../reconcile-connectors"
+
+# Host preflight (yq / jq / kubectl / port-forward to airbyte-server) is
+# no longer triggered from init.sh: connector registration / connection
+# apply moved to the in-cluster reconcile loop (per ADR-0001), and the
+# legacy fan of host scripts (register.sh, connect.sh, sync-state.sh,
+# upload-manifests.sh) was removed along with airbyte-toolkit/. Operators
+# running `reconcile-connectors/main.sh` from the host install yq / jq
+# themselves; the toolbox image ships them pre-installed for cron pods.
 
 # Single-namespace umbrella (PR #224). All Insight components — including the
 # bundled ClickHouse StatefulSet — live in the release namespace, default
 # `insight`. Exported so child scripts (airbyte-toolkit/*.sh, sync-flows.sh)
 # inherit the value.
-export INSIGHT_NAMESPACE="${INSIGHT_NAMESPACE:-insight}"
+: "${INSIGHT_NAMESPACE:?INSIGHT_NAMESPACE must be set, e.g. insight}"
+export INSIGHT_NAMESPACE
 INSIGHT_NS="$INSIGHT_NAMESPACE"
-CH_POD="${CLICKHOUSE_POD:-statefulset/insight-clickhouse}"
+CH_POD="${CLICKHOUSE_POD:-statefulset/insight-clickhouse}"  # RULE-DEFAULTS-OK: bundled umbrella deploys this exact StatefulSet name; override only for non-bundled CH
 
 # clickhouse-client inside the StatefulSet pod inherits CLICKHOUSE_USER /
 # CLICKHOUSE_PASSWORD from the container env (set by the chart from
@@ -59,22 +55,25 @@ fi
 # Fail-fast: no silent default. If neither env var nor ConfigMap key is
 # set, abort with a clear message instead of guessing `insight` and
 # creating a database the rest of the platform won't use.
-CH_DB="${CLICKHOUSE_DATABASE:-}"
+CH_DB="${CLICKHOUSE_DATABASE:-}"  # RULE-DEFAULTS-OK: empty sentinel; resolved from ConfigMap on next line, then asserted non-empty
 if [[ -z "$CH_DB" ]]; then
   CH_DB=$(kubectl get configmap -n "$INSIGHT_NS" insight-platform \
     -o jsonpath='{.data.CLICKHOUSE_DATABASE}')
 fi
 : "${CH_DB:?CLICKHOUSE_DATABASE not resolvable: set the env var explicitly, or ensure the umbrella chart is installed and the insight-platform ConfigMap has CLICKHOUSE_DATABASE populated (mirrors clickhouse.database in chart values).}"
 
-echo "=== Creating dbt databases ==="
+echo "=== Creating dbt databases (namespace=$INSIGHT_NS, app db=$CH_DB) ==="
 for db in staging silver "$CH_DB"; do
-  ch_exec --query "CREATE DATABASE IF NOT EXISTS $db"
+  if ! ch_exec --query "CREATE DATABASE IF NOT EXISTS $db"; then
+    echo "ERROR: failed to create $db database (namespace=$INSIGHT_NS)" >&2
+    exit 1
+  fi
 done
 
-echo "=== Creating bronze placeholders for missing connectors ==="
+echo "=== Creating bronze placeholders for missing connectors (namespace=$INSIGHT_NS) ==="
 "$SCRIPT_DIR/create-bronze-placeholders.sh"
 
-echo "=== Running ClickHouse migrations ==="
+echo "=== Running ClickHouse migrations (namespace=$INSIGHT_NS) ==="
 for migration in "$SCRIPT_DIR/migrations"/*.sql; do
   [ -f "$migration" ] || continue
   echo "  $(basename "$migration")"
@@ -85,18 +84,13 @@ done
 
 # MariaDB migrations: each backend service now owns and applies its own
 # migrations at startup (SeaORM Migrator::up). See ADR-0006.
-
-echo "=== Registering connectors ==="
-# register.sh / connect.sh both source lib/env.sh, which calls the Airbyte
-# REST API. From host that requires a port-forward; ensure_airbyte_pf
-# opens one and registers an EXIT trap. No-op when running in-cluster.
-ensure_airbyte_pf
-"${TOOLKIT_DIR}/register.sh" --all
-
-echo "=== Applying connections ==="
-"${TOOLKIT_DIR}/connect.sh" --all
+#
+# NOTE: connector registration + connection apply are now handled by
+# ../reconcile-connectors/main.sh (called from ../run-init.sh after this
+# script finishes the migrations + dbt-database setup above). Do NOT add
+# new `register.sh`/`connect.sh`-style invocations here — they were
+# removed along with the legacy fan of scripts in the version-driven-
+# reconcile refactor (ADR-0001).
 
 echo "=== Syncing workflows ==="
 ./scripts/sync-flows.sh --all
-
-echo "=== Init complete ==="

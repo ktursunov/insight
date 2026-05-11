@@ -1,6 +1,5 @@
 name: claude-enterprise
-version: "1.0"
-
+version: "2026.05.04"
 schedule: "0 11 * * *"   # daily at 11:00 UTC — accommodates Anthropic's 10:00 UTC aggregation
 workflow: sync
 
@@ -12,3 +11,6 @@ dbt_select: "tag:claude-enterprise+"
 
 connection:
   namespace: "bronze_claude_enterprise"
+secret:
+  required_fields:
+    - analytics_api_key

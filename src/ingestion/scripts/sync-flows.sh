@@ -24,7 +24,8 @@ CONNECTIONS_DIR="./connections"
 # ingestion/*.yaml, controlled by ingestion.templates.enabled). We skip
 # applying them here — they are already in the cluster, and re-applying
 # from a long-deleted local copy was a stale leftover from before PR #224.
-INSIGHT_NS="${INSIGHT_NAMESPACE:-insight}"
+: "${INSIGHT_NAMESPACE:?INSIGHT_NAMESPACE must be set, e.g. insight}"
+INSIGHT_NS="${INSIGHT_NAMESPACE}"
 if ! kubectl get workflowtemplate -n "$INSIGHT_NS" airbyte-sync >/dev/null 2>&1; then
   echo "ERROR: WorkflowTemplate airbyte-sync not found in namespace '$INSIGHT_NS'." >&2
   echo "       The umbrella chart should have installed it. Check:" >&2
@@ -35,19 +36,19 @@ if ! kubectl get workflowtemplate -n "$INSIGHT_NS" airbyte-sync >/dev/null 2>&1;
 fi
 echo "  Found shared WorkflowTemplates in $INSIGHT_NS"
 
-# --- Get connection_id from toolkit state ---
-export TOOLKIT_DIR="${SCRIPT_DIR}/../airbyte-toolkit"
-source "${TOOLKIT_DIR}/lib/state.sh"
+# --- Resolve connection_name from Secret annotations (per ADR-0005) ---
+# Per KEY DECISION #1 we now pass connection_name (not the UUID); the
+# airbyte-sync init-step resolves the UUID at submit time.
+export RECONCILE_DIR="${SCRIPT_DIR}/../reconcile-connectors"
+# shellcheck source=../reconcile-connectors/lib/secrets.sh
+source "${RECONCILE_DIR}/lib/secrets.sh"
 
-get_connection_id() {
+get_connection_name() {
   local tenant="$1" connector="$2"
-  local conn_id=""
-  for source_key in $(state_list "tenants.${tenant}.connectors.${connector}"); do
-    conn_id=$(state_get "tenants.${tenant}.connectors.${connector}.${source_key}.connection_id")
-    [[ -n "$conn_id" ]] && break
-  done
-  [[ -n "$conn_id" ]] || return 1
-  echo "$conn_id"
+  local source_id
+  source_id="$(resolve_source_id "${connector}" "${tenant}" 2>/dev/null || true)"
+  [[ -n "${source_id}" ]] || return 1
+  printf '%s-%s-%s-conn' "${connector}" "${source_id}" "${tenant}"
 }
 
 # --- Generate and apply CronWorkflows for a tenant ---
@@ -70,9 +71,9 @@ sync_tenant() {
 
     local connector schedule dbt_select workflow
     connector=$(yq -r '.name' "$descriptor")
-    schedule=$(yq -r '.schedule' "$descriptor" 2>/dev/null | grep -v null || echo "0 2 * * *")
-    dbt_select=$(yq -r '.dbt_select' "$descriptor" 2>/dev/null | grep -v null || echo "+tag:silver")
-    workflow=$(yq -r '.workflow' "$descriptor" 2>/dev/null | grep -v null || echo "sync")
+    schedule="$(yq -r '.schedule // "0 2 * * *"' "$descriptor" 2>/dev/null || echo "0 2 * * *")"
+    dbt_select="$(yq -r '.dbt_select // "+tag:silver"' "$descriptor" 2>/dev/null || echo "+tag:silver")"
+    workflow="$(yq -r '.workflow // "sync"' "$descriptor" 2>/dev/null || echo "sync")"
 
     # Find the workflow template
     local tpl="${WORKFLOWS_DIR}/schedules/${workflow}.yaml.tpl"
@@ -81,11 +82,11 @@ sync_tenant() {
       continue
     fi
 
-    # Get connection_id from state
-    local connection_id
-    connection_id=$(get_connection_id "$tenant" "$connector") || true
-    if [[ -z "$connection_id" ]]; then
-      echo "  SKIP: no connection_id for ${connector} tenant ${tenant}"
+    # Compute connection_name from Secret annotations.
+    local connection_name
+    connection_name=$(get_connection_name "$tenant" "$connector") || true
+    if [[ -z "$connection_name" ]]; then
+      echo "  SKIP: no connection_name for ${connector} tenant ${tenant}"
       continue
     fi
 
@@ -93,7 +94,7 @@ sync_tenant() {
     local output="${tenant_dir}/${connector}-sync.yaml"
     CONNECTOR="$connector" \
     TENANT_ID="$tenant" \
-    CONNECTION_ID="$connection_id" \
+    CONNECTION_NAME="$connection_name" \
     SCHEDULE="$schedule" \
     DBT_SELECT="$dbt_select" \
     NAMESPACE="$INSIGHT_NS" \
@@ -109,11 +110,13 @@ sync_tenant() {
 }
 
 # --- Main ---
+# Tenant list comes from $INSIGHT_TENANT_ID (single tenant) or
+# `--tenant <name>` flag, since Airbyte connection.name encodes the
+# tenant suffix and we use that as the identifier going forward.
 if [[ "${1:-}" == "--all" ]]; then
-  for tenant in $(state_list "tenants"); do
-    echo "  Syncing workflows for tenant: $tenant"
-    sync_tenant "$tenant"
-  done
+  tenant="${INSIGHT_TENANT_ID:?--all requires INSIGHT_TENANT_ID env}"
+  echo "  Syncing workflows for tenant: $tenant"
+  sync_tenant "$tenant"
 else
   tenant="${1:?Usage: $0 <tenant_id> | --all}"
   echo "  Syncing workflows for tenant: $tenant"

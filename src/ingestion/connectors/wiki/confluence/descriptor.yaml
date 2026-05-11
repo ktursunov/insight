@@ -1,6 +1,5 @@
 name: confluence
-version: "1.0"
-
+version: "2026.05.04"
 schedule: "0 4 * * *"
 workflow: sync
 
@@ -11,3 +10,9 @@ dbt_select: "tag:confluence+"
 
 connection:
   namespace: bronze_confluence
+secret:
+  required_fields:
+    - confluence_instance_url
+    - confluence_email
+    - confluence_api_token
+    - confluence_start_date

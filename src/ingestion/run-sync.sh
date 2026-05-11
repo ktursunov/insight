@@ -29,20 +29,9 @@ SOURCE_ID="${3:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-source "airbyte-toolkit/lib/state.sh"
-source "airbyte-toolkit/lib/secrets.sh"
-
-# ─── Resolve connection_id from toolkit state ───────────────────────────
-CONNECTION_ID=""
-for source_key in $(state_list "tenants.${TENANT}.connectors.${CONNECTOR}"); do
-  CONNECTION_ID=$(state_get "tenants.${TENANT}.connectors.${CONNECTOR}.${source_key}.connection_id")
-  [[ -n "$CONNECTION_ID" ]] && break
-done
-[[ -n "$CONNECTION_ID" ]] || {
-  echo "ERROR: no connection_id for connector '$CONNECTOR' tenant '$TENANT'." >&2
-  echo "       Run update-connections.sh first." >&2
-  exit 1
-}
+export RECONCILE_DIR="${SCRIPT_DIR}/reconcile-connectors"
+# shellcheck source=reconcile-connectors/lib/secrets.sh
+source "${RECONCILE_DIR}/lib/secrets.sh"
 
 # ─── Resolve insight_source_id from Secret annotations ──────────────────
 if [[ -z "$SOURCE_ID" ]]; then
@@ -86,11 +75,16 @@ fi
 
 TENANT_DASHED="${TENANT//_/-}"
 
+# Per ADR-0005 / KEY DECISION #1: pass connection_name (not the UUID).
+# The airbyte-sync template resolves connection_id at submit time via
+# resolve-connection-by-name. Pattern matches reconcile_compute_connection_name.
+CONNECTION_NAME="${CONNECTOR}-${SOURCE_ID}-${TENANT}-conn"
+
 echo "Submitting ingestion-pipeline:"
 echo "  namespace:          $INSIGHT_NAMESPACE"
 echo "  connector:          $CONNECTOR"
 echo "  tenant:             $TENANT"
-echo "  connection_id:      $CONNECTION_ID"
+echo "  connection_name:    $CONNECTION_NAME"
 echo "  insight_source_id:  $SOURCE_ID"
 echo "  data_source:        $DATA_SOURCE"
 echo "  dbt_select:         $DBT_SELECT"
@@ -100,7 +94,7 @@ NAMESPACE="$INSIGHT_NAMESPACE" \
   CONNECTOR="$CONNECTOR" \
   TENANT="$TENANT" \
   TENANT_DASHED="$TENANT_DASHED" \
-  CONNECTION_ID="$CONNECTION_ID" \
+  CONNECTION_NAME="$CONNECTION_NAME" \
   SOURCE_ID="$SOURCE_ID" \
   DATA_SOURCE="$DATA_SOURCE" \
   DBT_SELECT="$DBT_SELECT" \

@@ -1,5 +1,6 @@
 name: salesforce
 version: "2.0.0"
+# cdk_image: <not yet published — add full ghcr.io reference when image is built>
 type: cdk
 schedule: "0 5 * * *"
 workflow: sync
@@ -7,3 +8,9 @@ dbt_select: "tag:salesforce+"
 
 connection:
   namespace: "bronze_salesforce"
+secret:
+  required_fields:
+    - salesforce_instance_url
+    - salesforce_client_id
+    - salesforce_client_secret
+    - salesforce_start_date

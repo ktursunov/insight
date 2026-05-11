@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Initialize the ingestion stack: create databases, register connectors, apply connections, sync workflows.
-# Runs from the host machine (requires kubectl, curl, node, python3).
-# Run AFTER: ./dev-up.sh && ./secrets/apply.sh
+# Initialize the ingestion stack: validate the umbrella install, run dbt
+# database setup + ClickHouse migrations, adopt any pre-existing Airbyte
+# resources, then drive the cluster to the descriptor-declared state via
+# the single reconcile entrypoint.
+#
+# Runs from the host machine (requires kubectl, curl, python3).
+# Run AFTER: helm install of the umbrella chart + ./secrets/apply.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+cd "${SCRIPT_DIR}"
 
-export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/insight.kubeconfig}"
+: "${KUBECONFIG:?KUBECONFIG must be set to your cluster kubeconfig path}"
+: "${INSIGHT_NAMESPACE:?INSIGHT_NAMESPACE must be set, e.g. insight}"
+export KUBECONFIG
 
 # Single-namespace umbrella (PR #224). All Insight components live in the
-# release namespace, default `insight`. Override via INSIGHT_NAMESPACE.
-INSIGHT_NS="${INSIGHT_NAMESPACE:-insight}"
+# release namespace.
+INSIGHT_NS="${INSIGHT_NAMESPACE}"
 
 # --- Verify the umbrella is installed ---
 echo "=== Verifying umbrella install ==="
@@ -26,5 +32,19 @@ if ! kubectl get -n "$INSIGHT_NS" secret insight-db-creds >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- Run init directly from host ---
+# --- Migrations + dbt databases (still managed by scripts/init.sh) ---
 source ./scripts/init.sh
+
+# --- Single declarative reconcile chain ---
+# Per ADR-0007 / KEY DECISION #13: Secret validation is now an INTERNAL pre-step
+# of reconcile-connectors/main.sh (valsec_check_secret), not a standalone script.
+# 1. one-shot adopt: annotate any pre-existing Airbyte resources so the
+#    new cfg-hash / version invariants hold before the diff pass
+# 2. reconcile: descriptor.yaml + Secret-driven, idempotent
+echo "=== Adopting pre-existing Airbyte resources ==="
+bash "${SCRIPT_DIR}/reconcile-connectors/main.sh" adopt
+
+echo "=== Reconciling Airbyte to descriptor state ==="
+bash "${SCRIPT_DIR}/reconcile-connectors/main.sh"
+
+echo "=== Init complete ==="
