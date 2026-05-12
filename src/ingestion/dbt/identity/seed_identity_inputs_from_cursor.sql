@@ -27,7 +27,13 @@
 
 WITH source AS (
     SELECT
-        cm.id                                                       AS source_account_id,
+        -- toString() because `silver/_shared/identity_inputs.sql` UNIONs
+        -- this with macro-based connectors that emit source_account_id
+        -- as String (entity_id AS source_account_id). ClickHouse 25.3
+        -- rejects UNION across UUID and String with NO_COMMON_TYPE (386).
+        -- Per docs/domain/identity-resolution/specs/DESIGN.md the
+        -- canonical type for source_account_id is String/VARCHAR(320).
+        toString(cm.id)                                             AS source_account_id,
         cm.name,
         cm.email,
         cm.tenant_id

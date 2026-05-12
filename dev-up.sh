@@ -255,6 +255,16 @@ build_and_load_image() {
   fi
 }
 
+# Frontend image coordinates — defined OUTSIDE the `if != ingestion`
+# block because the DEV_VALUES heredoc below references `${FE_REPO}` /
+# `${FE_TAG}` unconditionally. Under `set -u`, an ingestion-only run
+# would otherwise crash with `FE_REPO: unbound variable` after the
+# toolbox/jira-enrich builds succeed but before the values file is
+# generated.
+FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
+FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
+FE_IMAGE="${FE_REPO}:${FE_TAG}"
+
 # App services are MANDATORY components of the umbrella (no enabled-flag),
 # so whenever we install the umbrella — including `frontend` or `backend`
 # component runs that trigger helm upgrade — every image must be present
@@ -274,9 +284,6 @@ if [[ "$COMPONENT" != "ingestion" ]]; then
   # what the dev just edited.
   # No `:latest` default — tag is the dev image_tag_for() output, which
   # is a deterministic dev tag (`dev`, derived from commit / mtime).
-  FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
-  FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
-  FE_IMAGE="${FE_REPO}:${FE_TAG}"
   # Locate the insight-front checkout. The committed `insight-front_symlink`
   # only resolves in the primary worktree; under .claude/worktrees/<branch>
   # we fall back to git's worktree list to find the main repo's sibling.

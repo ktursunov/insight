@@ -146,12 +146,37 @@ MAX_VALUE_FULL_TEXT_LEN  = 512   # VARCHAR(512) -- display_name catch-all
 MAX_SOURCE_ACCOUNT_ID_LEN = 320  # VARCHAR(320) -- same domain as value_id
 
 # value_type values that hardcode-route into value_id vs value_full_text;
-# everything else (employee_id, platform_id, functional_team, and any
-# future custom value_type) goes into the TEXT value column.
-# Canonical value_types: id, email, username, display_name. The set is
-# extensible — value_type is a free-form string, not an enum.
-VALUE_TYPES_FOR_VALUE_ID        = {"id", "email", "username"}
-VALUE_TYPES_FOR_VALUE_FULL_TEXT = {"display_name"}
+# everything else (functional_team, any future custom value_type) goes
+# into the TEXT value column.
+#
+# Routing rules (mirrored in identity-csharp's PersonsRepository SQL):
+#   - value_id: identifier-shaped tokens that demand strict byte
+#     comparison and an indexed hot path. Adds parent_email, parent_id,
+#     parent_person_id (resolved Insight UUID written by the
+#     reconciliation service) and employee_id to the canonical
+#     {id, email, username} set.
+#   - value_full_text: human-readable, accent-insensitive search.
+#     Display name plus the BambooHR free-form attributes the
+#     C# service projects onto Person (first/last/department/
+#     division/job_title/status).
+VALUE_TYPES_FOR_VALUE_ID = {
+    "id",
+    "email",
+    "username",
+    "employee_id",
+    "parent_email",
+    "parent_id",
+    "parent_person_id",
+}
+VALUE_TYPES_FOR_VALUE_FULL_TEXT = {
+    "display_name",
+    "first_name",
+    "last_name",
+    "department",
+    "division",
+    "job_title",
+    "status",
+}
 
 # Author sentinel for automatically-minted bindings. Real operator UUIDs
 # will replace this in the future merge/split flows.
