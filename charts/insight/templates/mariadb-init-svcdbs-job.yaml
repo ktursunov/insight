@@ -1,0 +1,106 @@
+{{/*
+==============================================================================
+ Per-service MariaDB database provisioning (ADR-0006)
+==============================================================================
+
+Helm Hook Job that provisions each backend service's owned MariaDB
+database — CREATE DATABASE + GRANT — against whatever `mariadb.host`
+resolves to. Works in both modes from a single source of truth:
+
+- Bundled (`mariadb.deploy=true`):     bitnami subchart starts the
+                                       MariaDB pod; this Job waits for
+                                       it to accept connections, then
+                                       runs the SQL.
+- External (`mariadb.deploy=false`):   MariaDB is hosted out-of-chart
+                                       (layered L2, managed RDS / Cloud
+                                       SQL, …); this Job dials
+                                       `mariadb.host` directly.
+
+Hook timing: `post-install,post-upgrade` (NOT pre-*). The Job's pod
+mounts `insight-db-creds` for the root password — that Secret is
+emitted by the chart's regular templates (or pre-created by the
+operator in BYO/gitops mode) and is therefore available AFTER the
+main release manifests apply, which is precisely when post-install
+fires. The previous pre-install attempt raced against this and is the
+reason the earlier `identity-db-init-job.yaml` was rolled back.
+
+Idempotent. Re-runs on every upgrade — both `CREATE DATABASE IF NOT
+EXISTS` and `GRANT ALL` are no-ops on the second-and-later runs.
+
+When a future backend service adds its own DB requirement, append a
+gated block below following the identity pattern: read the service's
+`<svc>.databaseName` from values, CREATE + GRANT, leave a log line.
+The list lives HERE; do not mirror it elsewhere.
+==============================================================================
+*/}}
+{{- if .Values.identity.deploy }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "insight.fullname" . }}-mariadb-init-svcdbs
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  labels:
+    {{- include "insight.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb-init
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "insight.fullname" . }}-mariadb-init
+        app.kubernetes.io/component: mariadb-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: db-init
+          # Track the bundled MariaDB minor so client/server protocols
+          # align. Bitnami legacy image namespace (post-2025 Bitnami
+          # licensing change — see umbrella `mariadb.image.repository`).
+          image: docker.io/bitnamilegacy/mariadb:11.4.4-debian-12-r0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MARIADB_HOST
+              value: {{ include "insight.mariadb.host" . | quote }}
+            - name: MARIADB_PORT
+              value: {{ include "insight.mariadb.port" . | quote }}
+            - name: MARIADB_USER
+              value: {{ required "mariadb.username is required" .Values.mariadb.username | quote }}
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: insight-db-creds
+                  key: mariadb-root-password
+          {{- /* SQL is built with printf to keep MariaDB identifier
+                 backticks literal (heredoc-with-backticks would trigger
+                 bash command substitution). */}}
+          command:
+            - bash
+            - -ec
+            - |
+              echo "Waiting for MariaDB at ${MARIADB_HOST}:${MARIADB_PORT}..."
+              for i in $(seq 1 60); do
+                if mariadb -h"$MARIADB_HOST" -P"$MARIADB_PORT" -uroot -e 'SELECT 1' >/dev/null 2>&1; then
+                  echo "MariaDB reachable after $i attempt(s)."
+                  break
+                fi
+                if [ "$i" = "60" ]; then
+                  echo "ERROR: MariaDB did not become reachable within 2 minutes" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+
+              echo "Provisioning per-service databases..."
+              {{- if .Values.identity.deploy }}
+              IDENTITY_DB={{ required "identity.databaseName is required" .Values.identity.databaseName | quote }}
+              SQL=$(printf 'CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON `%s`.* TO `%s`@`%%`; FLUSH PRIVILEGES;' \
+                "$IDENTITY_DB" "$IDENTITY_DB" "$MARIADB_USER")
+              mariadb -h"$MARIADB_HOST" -P"$MARIADB_PORT" -uroot -e "$SQL"
+              echo "Provisioned ${IDENTITY_DB} (granted to ${MARIADB_USER}@%)."
+              {{- end }}
+              echo "Done."
+{{- end }}

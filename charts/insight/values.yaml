@@ -240,25 +240,20 @@ mariadb:
     database: "" # MUST match mariadb.database
     existingSecret: "insight-db-creds"
   # Per-service MariaDB databases (ADR-0006 — each backend service owns
-  # its own DB). bitnami runs scripts from this ConfigMap ONCE on the
-  # first pod boot (when /bitnami/mariadb is empty), mounted at
-  # /docker-entrypoint-initdb.d. After the first boot the databases
-  # live in the PVC — restarts and helm upgrades never re-run the
-  # scripts (and don't need to: the data survives in the PVC).
+  # its own DB) are now provisioned by a post-install / post-upgrade
+  # Helm Hook Job (see templates/mariadb-init-svcdbs-job.yaml). The Job
+  # authenticates as MariaDB root using `mariadb-root-password` from
+  # `insight-db-creds`, runs idempotent CREATE DATABASE + GRANT against
+  # whatever `mariadb.host` resolves to — works for both bundled
+  # (`mariadb.deploy=true`) and external (layered gitops with
+  # `mariadb.deploy=false`) modes from a SINGLE source of truth.
   #
-  # The ConfigMap is created from `templates/mariadb-initdb-scripts.yaml`
-  # so the SQL can interpolate `mariadb.username` via Helm templating
-  # (values.yaml itself is NOT Helm-templated, so we cannot embed
-  # `{{ .Values.mariadb.username }}` directly under `initdbScripts:`).
-  #
-  # NB: this is a TOP-LEVEL bitnami subchart key (mariadb.initdbScriptsConfigMap),
-  # NOT under `primary:`. The path matters — see the bundled chart's
-  # values.yaml line 170 (chart version 20.0.0).
-  #
-  # Replaces the previous `identity-db-init-job.yaml` Helm pre-install
-  # Job, whose `pre-install,pre-upgrade` hook ordering raced against
-  # the regular-template Secret `insight-db-creds` (chicken-and-egg).
-  initdbScriptsConfigMap: "insight-mariadb-initdb-scripts"
+  # Replaces the previous bundled-only `mariadb-initdb-scripts.yaml`
+  # ConfigMap. The earlier `pre-install` Hook had a chicken-and-egg with
+  # the regular-template `insight-db-creds`; the new Hook uses
+  # `post-install` so the Secret is already applied when the Job runs,
+  # and the Job has an internal wait-for-MariaDB loop so the bundled
+  # subchart's first-boot delay doesn't matter.
   primary:
     persistence:
       size: 5Gi
