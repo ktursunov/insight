@@ -45,6 +45,7 @@ docs/deploy/
 │   └── argo-workflows/       # values.yaml
 ├── environments/
 │   └── local/                # sample sandbox env (start here)
+│       ├── inventory.yaml    # what this cluster has (drives bootstrap / system / seal / deploy)
 │       ├── values.yaml       # umbrella overlay (L3)
 │       ├── pub-cert.pem.sample
 │       └── sealed-secrets/
@@ -100,17 +101,30 @@ Before running any `make` target against a cluster:
    export KUBE_CTX=<actual-context-name>
    ```
 
+## Inventory file
+
+Each env carries an `inventory.yaml` that declares the cluster's topology
+in one place: kube-context, namespaces, which L0 controllers to install,
+which L2 services to install, which secrets to seal, and whether
+`make deploy` requires a `CONFIRM` token. Read by `make bootstrap`,
+`make system`, `make seal`, and `make deploy`. The per-service /
+per-secret targets (`make system-mariadb`, `make seal-secret …`) remain
+available for one-off / rotation work.
+
+Skim `environments/local/inventory.yaml` for the schema; it's the
+shortest path to understanding what each env can declare.
+
 ## Quick start (local k3s sandbox)
 
 ```bash
 brew bundle install
 make doctor                          # verify tooling
 
-# L0 — fresh cluster. Installs ingress-nginx, cert-manager,
-# sealed-secrets-controller + creates the insight-infra + insight
-# namespaces. Idempotent.
+# L0 — install ingress-nginx, cert-manager, sealed-secrets-controller
+# plus the insight-infra + insight namespaces. Driven by
+# inventory.bootstrap.*. Idempotent.
 make bootstrap   ENV=local
-make fetch-cert  ENV=local           # capture the controller's pub cert for `make seal-*`
+make fetch-cert  ENV=local           # capture the controller's pub cert for `make seal*`
 
 # Stage cleartext Secret manifests in the sample secret store. (Copy
 # the sample, fill in real passwords. NEVER COMMIT the populated file —
@@ -118,25 +132,15 @@ make fetch-cert  ENV=local           # capture the controller's pub cert for `ma
 cp secrets-store.yaml.sample secrets-store.yaml
 $EDITOR secrets-store.yaml
 
-# Seal each one into the repo (cleartext is streamed via
-# secret-fetch.sh straight into kubeseal — never touches disk).
-make seal-secret ENV=local NAMESPACE=insight-infra NAME=mariadb-creds
-make seal-secret ENV=local NAMESPACE=insight-infra NAME=clickhouse-creds
-make seal-secret ENV=local NAMESPACE=insight-infra NAME=redis-creds
-make seal-secret ENV=local NAMESPACE=insight       NAME=insight-db-creds
-# (skip insight-oidc for the sandbox — apiGateway.authDisabled: true)
+# Seal everything listed in inventory.secrets. Cleartext is streamed
+# via secret-fetch.sh straight into kubeseal — never touches disk.
+make seal ENV=local
 
-# L2 — provision the shared infra this cluster self-hosts. No chain;
-# run only the services you need.
-make system-mariadb         ENV=local
-make system-clickhouse      ENV=local
-make system-redis           ENV=local
-make system-redpanda        ENV=local
-make system-redpanda-console ENV=local
+# L2 — install all shared infra with inventory.system.<svc>: true.
+# (Individual `make system-<svc>` targets stay available for one-offs.)
 AIRBYTE_SETUP_EMAIL=admin@example.com AIRBYTE_SETUP_ORG=Sandbox \
-  make system-airbyte       ENV=local
-make system-argo            ENV=local
-make system-status          ENV=local   # what's installed in insight-infra
+  make system            ENV=local
+make system-status       ENV=local   # what's installed in insight-infra
 
 # L3 — the umbrella app. `make deploy` is an alias for `make deploy-app`
 # and only touches the `insight` namespace. It applies every L3 sealed
@@ -159,21 +163,25 @@ make deploy ENV=local
 # 1. Copy the sample env.
 cp -r environments/local environments/<new>
 
-# 2. Edit environments/<new>/values.yaml — hostname, ingress, OIDC,
+# 2. Edit environments/<new>/inventory.yaml — kube-context, which L0
+#    controllers / L2 services / secrets this env wants, whether it's
+#    protected.
+
+# 3. Edit environments/<new>/values.yaml — hostname, ingress, OIDC,
 #    image tags, resource requests, etc. for the new cluster.
 
-# 3. Edit bootstrap/local → copy to bootstrap/<new> and adjust if your
-#    cluster needs different ingress/cert-manager/sealed-secrets values.
+# 4. Optionally copy bootstrap/local → bootstrap/<new> and adjust if
+#    your cluster needs different ingress/cert-manager/sealed-secrets
+#    values. (The bootstrap/<env>/ dir is read by the bootstrap-*
+#    sub-targets; missing = chart defaults.)
 
-# 4. Bootstrap the new cluster.
+# 5. Bootstrap + fetch cert + seal + L2 + L3 — same as the quick start
+#    above, just with ENV=<new>.
 make bootstrap  ENV=<new>
-make fetch-cert ENV=<new>            # capture this cluster's pub cert
-
-# 5. Seal that env's secrets.
-make seal-secret ENV=<new> NAMESPACE=insight-infra NAME=mariadb-creds
-# ... etc.
-
-# 6. L2 + L3 as in the quick start, with ENV=<new>.
+make fetch-cert ENV=<new>
+make seal       ENV=<new>
+make system     ENV=<new>
+make deploy     ENV=<new>           # protected envs need CONFIRM=yes-deploy-<new>
 ```
 
 The `local` env disables OIDC for sandbox convenience. For production

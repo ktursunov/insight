@@ -34,20 +34,24 @@
 # semver from .insight-version.
 
 ENV              ?= local
-# Each cluster has well-known namespaces — the L3 app always lives in
-# `insight`, the L2 shared infrastructure in `insight-infra`. ENV
-# selects which gitops values file + kube-context
-# we target, NOT the namespace name. (Two-envs-on-one-cluster is not a
-# supported topology; one cluster per env, simple.)
-NS_APP           ?= insight
-NS_INFRA         ?= insight-infra
+# Single source of truth for per-env cluster topology. Drives bootstrap,
+# system, seal, and deploy targets. Schema: see
+# environments/local/inventory.yaml.
+INVENTORY        := environments/$(ENV)/inventory.yaml
+
+# Inventory-driven values. CLI flags and shell env vars override (via ?=).
+# If the inventory file is missing, `$(shell yq ...)` returns "" and the
+# downstream `inventory-present` / `kube-ctx-required` guards fail loud.
+KUBE_CTX         ?= $(shell yq -r '.kubeContext // ""' $(INVENTORY) 2>/dev/null)
+NS_APP           ?= $(shell yq -r '.namespaces.services // "insight"'        $(INVENTORY) 2>/dev/null)
+NS_INFRA         ?= $(shell yq -r '.namespaces.infra    // "insight-infra"'  $(INVENTORY) 2>/dev/null)
+RELEASE          ?= $(shell yq -r '.release             // "insight"'        $(INVENTORY) 2>/dev/null)
+
 # Back-compat alias for older targets still referencing NAMESPACE.
 NAMESPACE        ?= $(NS_APP)
-RELEASE          ?= insight
 CHART            ?= oci://ghcr.io/cyberfabric/charts/insight
 INSIGHT_VERSION  ?= $(shell cat .insight-version 2>/dev/null)
 VALUES           ?= environments/$(ENV)/values.yaml
-KUBE_CTX         ?= insight-$(ENV)
 TIMEOUT          ?= 10m
 RENDER_DIR       := .deploy
 
@@ -103,25 +107,21 @@ ARGO_WORKFLOW_SA ?= argo-workflow
 
 # Per-cluster bootstrap controllers (ingress, cert-manager, sealed-secrets).
 # Versions pinned here; bump deliberately. Per-env overrides go in
-# bootstrap/<env>/<controller>-values.yaml.
-INGRESS_NGINX_NAMESPACE  ?= ingress-nginx
+# bootstrap/<env>/<controller>-values.yaml. Namespaces fall through to
+# inventory.namespaces.<controller> for rare-but-allowed overrides.
+INGRESS_NGINX_NAMESPACE  ?= $(shell yq -r '.namespaces.ingressNginx  // "ingress-nginx"' $(INVENTORY) 2>/dev/null)
 INGRESS_NGINX_RELEASE    ?= ingress-nginx
 INGRESS_NGINX_VERSION    ?= 4.15.1
 
-CERT_MANAGER_NAMESPACE   ?= cert-manager
+CERT_MANAGER_NAMESPACE   ?= $(shell yq -r '.namespaces.certManager   // "cert-manager"' $(INVENTORY) 2>/dev/null)
 CERT_MANAGER_RELEASE     ?= cert-manager
 CERT_MANAGER_VERSION     ?= 1.20.2
 
-SEALED_SECRETS_NAMESPACE ?= kube-system
+SEALED_SECRETS_NAMESPACE ?= $(shell yq -r '.namespaces.sealedSecrets // "kube-system"' $(INVENTORY) 2>/dev/null)
 SEALED_SECRETS_RELEASE   ?= sealed-secrets-controller
 SEALED_SECRETS_VERSION   ?= 2.17.4
 
 BOOTSTRAP_DIR := bootstrap/$(ENV)
-
-# Higher environments require an explicit CONFIRM=yes-deploy-<env> token
-# on `make deploy`. Add your customer-named production env names here,
-# space-separated. Empty by default — local sandbox needs no guard.
-PROTECTED_ENVS :=
 
 # Colour helpers (no-op if not a TTY)
 _TPUT := $(shell tput colors 2>/dev/null || echo 0)
@@ -138,34 +138,40 @@ endif
 help:
 	@echo "Targets:"
 	@echo "  make doctor                       Check required tooling"
-	@echo "  make bootstrap ENV=$(ENV)         Cluster prereqs: ingress, cert-manager, sealed-secrets"
+	@echo "  make bootstrap ENV=$(ENV)         L0 — inventory-driven cluster prereqs (ingress, cert-manager, sealed-secrets)"
 	@echo "  make sync                         git pull --ff-only origin main"
 	@echo "  make diff ENV=$(ENV)              Show poller commits + render diff"
 	@echo "  make deploy ENV=$(ENV)            L3 only — helm install/upgrade the umbrella (alias: deploy-app)"
 	@echo "  make apply-app-secrets ENV=$(ENV)   L3 prereq — apply sealed manifests + derive *-config Secrets from insight-db-creds"
+	@echo "  make system ENV=$(ENV)            L2 — install all services with inventory.system.<svc>: true"
 	@echo "  make system-mariadb ENV=$(ENV)            }"
-	@echo "  make system-clickhouse ENV=$(ENV)         } L2 — one Helm release per service in insight-infra."
-	@echo "  make system-redis ENV=$(ENV)              } Run only the subset this cluster self-hosts."
-	@echo "  make system-redpanda ENV=$(ENV)           } Skip a service entirely if you use a managed external"
-	@echo "  make system-redpanda-console ENV=$(ENV)   } endpoint or another team's infra."
+	@echo "  make system-clickhouse ENV=$(ENV)         } L2 — one-at-a-time for one-offs / rotation."
+	@echo "  make system-redis ENV=$(ENV)              } Top-level 'make system' chains all enabled in inventory."
+	@echo "  make system-redpanda ENV=$(ENV)           }"
+	@echo "  make system-redpanda-console ENV=$(ENV)   }"
 	@echo "  make system-airbyte ENV=$(ENV)            }   (Airbyte = chart + post-install setup wizard)"
 	@echo "  make system-argo ENV=$(ENV)               }   (Argo Workflows = chart + supplemental RBAC apply)"
 	@echo "  make system-status ENV=$(ENV)             Show what's installed in insight-infra"
 	@echo "  make rollback ENV=$(ENV)          Roll back the umbrella to previous revision"
 	@echo "  make status ENV=$(ENV)            kubectl rollout status + helm status"
 	@echo "  make tag                          Tag current commit as deploy-…"
-	@echo "  make seal-secret …                Seal a Secret via scripts/secret-fetch.sh (see README)"
+	@echo "  make seal ENV=$(ENV)              Seal all secrets listed in inventory.secrets"
+	@echo "  make seal-secret …                Seal one Secret via scripts/secret-fetch.sh"
 	@echo "  make seal-from-file VALUE_FILE=…  Seal a Secret from a local cleartext file"
 	@echo "  make seal-from-template …         Seal a *-secret-template.yaml in this repo"
 	@echo "  make seal-stdin …                 Seal a Secret read from stdin"
 	@echo "  make clear-seal-template …        Empty all values in a template file"
 	@echo "  make fetch-cert ENV=…             kubeseal --fetch-cert into pub-cert.pem"
 	@echo
-	@echo "Environment defaults:"
-	@echo "  ENV=$(ENV)  NAMESPACE=$(NAMESPACE)  RELEASE=$(RELEASE)"
+	@echo "Inventory (drives bootstrap / system / seal / deploy):"
+	@echo "  $(INVENTORY)"
+	@echo
+	@echo "Resolved values (inventory + CLI/env overrides):"
+	@echo "  ENV=$(ENV)  KUBE_CTX=$(KUBE_CTX)  RELEASE=$(RELEASE)"
+	@echo "  NS_APP=$(NS_APP)  NS_INFRA=$(NS_INFRA)"
 	@echo "  CHART=$(CHART)"
 	@echo "  INSIGHT_VERSION=$(INSIGHT_VERSION)"
-	@echo "  VALUES=$(VALUES)  KUBE_CTX=$(KUBE_CTX)"
+	@echo "  VALUES=$(VALUES)"
 
 # ─── Pre-flight checks ─────────────────────────────────────────────────
 
@@ -191,13 +197,30 @@ sync-clean:
 		echo "$(C_RED)ERROR$(C_RST): HEAD is not equal to origin/$$(git rev-parse --abbrev-ref @{u} | cut -d/ -f2-)"; \
 		echo "       run 'make sync' first"; exit 1; fi
 
+.PHONY: inventory-present
+inventory-present:
+	@test -f $(INVENTORY) \
+		|| { echo "$(C_RED)ERROR$(C_RST): inventory not found at $(INVENTORY)"; \
+		     echo "       Copy environments/local/inventory.yaml to a new env directory,"; \
+		     echo "       adjust kubeContext / namespaces / bootstrap / system / secrets,"; \
+		     echo "       then re-run."; \
+		     exit 1; }
+
+.PHONY: kube-ctx-required
+kube-ctx-required: inventory-present
+	@test -n "$(KUBE_CTX)" \
+		|| { echo "$(C_RED)ERROR$(C_RST): KUBE_CTX is not set"; \
+		     echo "       Set it on the command line (KUBE_CTX=...), or in your shell environment,"; \
+		     echo "       or add 'kubeContext: <name>' to $(INVENTORY)."; \
+		     exit 1; }
+
 .PHONY: vpn-up
-vpn-up:
+vpn-up: kube-ctx-required
 	@kubectl --context $(KUBE_CTX) --request-timeout=5s cluster-info >/dev/null 2>&1 \
 		|| { echo "$(C_RED)ERROR$(C_RST): cannot reach cluster '$(KUBE_CTX)'; is the VPN up?"; exit 1; }
 
 .PHONY: kube-ctx
-kube-ctx:
+kube-ctx: kube-ctx-required
 	@CUR=$$(kubectl config current-context 2>/dev/null || echo none); \
 	if [ "$$CUR" != "$(KUBE_CTX)" ]; then \
 		echo "$(C_RED)ERROR$(C_RST): current kube-context is '$$CUR', expected '$(KUBE_CTX)'"; \
@@ -205,11 +228,11 @@ kube-ctx:
 		exit 1; fi
 
 .PHONY: confirm
-confirm:
-	@if echo " $(PROTECTED_ENVS) " | grep -q " $(ENV) "; then \
+confirm: inventory-present
+	@if [ "$$(yq -r '.protected // false' $(INVENTORY))" = "true" ]; then \
 		EXPECTED="yes-deploy-$(ENV)"; \
 		if [ "$(CONFIRM)" != "$$EXPECTED" ]; then \
-			echo "$(C_RED)ERROR$(C_RST): deploy to '$(ENV)' requires CONFIRM=$$EXPECTED"; \
+			echo "$(C_RED)ERROR$(C_RST): deploy to '$(ENV)' requires CONFIRM=$$EXPECTED (per inventory.protected)"; \
 			exit 1; fi; \
 	fi
 
@@ -292,11 +315,37 @@ deploy-insight: sync-clean vpn-up kube-ctx confirm values-present chart-present 
 		--history-max 10 \
 		2>&1 | tee $$LOG
 
+# Helper: chain a sub-target IF the matching inventory.<section>.<key>
+# is true; otherwise print a skip message. Use with $(call …) below.
+#   $(1) — inventory key (e.g. bootstrap.ingressNginx)
+#   $(2) — sub-target name (e.g. bootstrap-ingress-nginx)
+define _run_if_enabled
+@if [ "$$(yq -r '.$(1) // false' $(INVENTORY))" = "true" ]; then \
+	echo "$(C_GRN)→$(C_RST) $(2)"; \
+	$(MAKE) --no-print-directory $(2) ENV=$(ENV); \
+else \
+	echo "$(C_YEL)skip$(C_RST) $(2) (inventory.$(1) != true)"; \
+fi
+endef
+
 # ─── L2 system services ────────────────────────────────────────────────
 # Each target follows the same shape: helm repo (if applicable), helm
 # upgrade --install with shared base + optional per-env overlay, into
-# $(NS_INFRA). Idempotent. Run only when the cluster self-hosts the
-# service; skip when an external/managed endpoint is used.
+# $(NS_INFRA). Idempotent. Per-service targets remain available for
+# one-off / rotation work.
+#
+# `make system` orchestrates them per inventory.system.<svc>.
+
+.PHONY: system
+system: inventory-present vpn-up kube-ctx
+	$(call _run_if_enabled,system.mariadb,system-mariadb)
+	$(call _run_if_enabled,system.clickhouse,system-clickhouse)
+	$(call _run_if_enabled,system.redis,system-redis)
+	$(call _run_if_enabled,system.redpanda,system-redpanda)
+	$(call _run_if_enabled,system.redpandaConsole,system-redpanda-console)
+	$(call _run_if_enabled,system.airbyte,system-airbyte)
+	$(call _run_if_enabled,system.argoWorkflows,system-argo)
+	@echo "$(C_GRN)system complete$(C_RST) → $(NS_INFRA)"
 
 define _helm_repo_add
 	helm repo add $(1) $(2) >/dev/null 2>&1 || true; helm repo update $(1) >/dev/null
@@ -307,19 +356,18 @@ endef
 _system_values_args = -f system/$(1)/values.yaml $(shell test -s environments/$(ENV)/$(1)-values.yaml && echo -f environments/$(ENV)/$(1)-values.yaml)
 
 # Helper: require a sealed-secret named `<svc>-creds` to be present in
-# the repo for this env. Apply it to insight-infra. If missing, print
-# clear instructions (secret resource name + seal command + pointer to
-# SECRETS.md) and abort. Used by system-* targets whose chart has
-# `existingSecret: <svc>-creds` in the baseline values.
+# the repo for this env. Apply it to $(NS_INFRA). If missing, print
+# clear instructions and abort. Used by system-* targets whose chart
+# has `existingSecret: <svc>-creds` in the baseline values.
 define _require_system_creds
 @SVC=$(1); \
-SEALED="environments/$(ENV)/sealed-secrets/insight-infra/$$SVC-creds-sealedsecret.yaml"; \
+SEALED="environments/$(ENV)/sealed-secrets/$(NS_INFRA)/$$SVC-creds-sealedsecret.yaml"; \
 if [ -f "$$SEALED" ]; then \
   kubectl --context $(KUBE_CTX) apply -f "$$SEALED" >/dev/null; \
   echo "$(C_GRN)applied$(C_RST) $$SEALED"; \
 else \
   echo "$(C_RED)ERROR$(C_RST): missing $$SEALED"; \
-  echo "       The $$SVC chart expects a Secret named '$$SVC-creds' in insight-infra."; \
+  echo "       The $$SVC chart expects a Secret named '$$SVC-creds' in $(NS_INFRA)."; \
   echo "       To create it:"; \
   echo "         1. Stage the cleartext Secret manifest where scripts/secret-fetch.sh"; \
   echo "            can find it (sample stub: add an entry keyed"; \
@@ -327,21 +375,21 @@ else \
   echo "            in secrets-store.yaml). See system/$$SVC/SECRETS.md for the"; \
   echo "            required keys."; \
   echo "         2. Seal it into the repo:"; \
-  echo "              make seal-secret ENV=$(ENV) NAMESPACE=insight-infra NAME=$$SVC-creds"; \
+  echo "              make seal-secret ENV=$(ENV) NAMESPACE=$(NS_INFRA) NAME=$$SVC-creds"; \
   echo "         3. Commit the resulting $$SEALED and re-run."; \
   exit 1; \
 fi
 endef
 
 # Helper: opportunistically apply ANY sealed-secret manifest under
-# insight-infra whose filename starts with the service prefix. Silent
+# $(NS_INFRA) whose filename starts with the service prefix. Silent
 # if none exist. Used by services whose baseline does not require a
 # secret (redpanda, redpanda-console, airbyte, argo-workflows), but
 # whose per-env overlay may add TLS / auth / object-store creds.
 define _apply_optional_system_secrets
 @SVC=$(1); \
 shopt -s nullglob 2>/dev/null || true; \
-for f in environments/$(ENV)/sealed-secrets/insight-infra/$$SVC*-sealedsecret.yaml; do \
+for f in environments/$(ENV)/sealed-secrets/$(NS_INFRA)/$$SVC*-sealedsecret.yaml; do \
   [ -e "$$f" ] || continue; \
   kubectl --context $(KUBE_CTX) apply -f "$$f" >/dev/null; \
   echo "$(C_GRN)applied$(C_RST) $$f"; \
@@ -500,6 +548,24 @@ secret-fetch-present:
 		     echo "       Replace it with an integration against your password manager."; \
 		     exit 1; }
 
+.PHONY: seal
+seal: inventory-present secret-fetch-present pub-cert-present
+	@echo "$(C_GRN)→$(C_RST) seal infra secrets (namespace=$(NS_INFRA))"
+	@yq -r '.secrets.infra[]?    | select(.enabled) | .name' $(INVENTORY) | while read -r name; do \
+		[ -z "$$name" ] && continue; \
+		echo "  - $$name"; \
+		$(MAKE) --no-print-directory seal-secret \
+			ENV=$(ENV) NAMESPACE=$(NS_INFRA) NAME=$$name || exit 1; \
+	done
+	@echo "$(C_GRN)→$(C_RST) seal services secrets (namespace=$(NS_APP))"
+	@yq -r '.secrets.services[]? | select(.enabled) | .name' $(INVENTORY) | while read -r name; do \
+		[ -z "$$name" ] && continue; \
+		echo "  - $$name"; \
+		$(MAKE) --no-print-directory seal-secret \
+			ENV=$(ENV) NAMESPACE=$(NS_APP) NAME=$$name || exit 1; \
+	done
+	@echo "$(C_GRN)seal complete$(C_RST) → environments/$(ENV)/sealed-secrets/"
+
 .PHONY: pub-cert-present
 pub-cert-present:
 	@test -f $(PUB_CERT) \
@@ -589,7 +655,11 @@ fetch-cert: vpn-up kube-ctx
 # defaults.
 
 .PHONY: bootstrap
-bootstrap: bootstrap-namespaces bootstrap-ingress-nginx bootstrap-cert-manager bootstrap-sealed-secrets
+bootstrap: inventory-present vpn-up kube-ctx
+	$(call _run_if_enabled,bootstrap.namespaces,bootstrap-namespaces)
+	$(call _run_if_enabled,bootstrap.ingressNginx,bootstrap-ingress-nginx)
+	$(call _run_if_enabled,bootstrap.certManager,bootstrap-cert-manager)
+	$(call _run_if_enabled,bootstrap.sealedSecrets,bootstrap-sealed-secrets)
 	@echo "$(C_GRN)bootstrap complete$(C_RST) → $(KUBE_CTX)"
 
 # Bootstrap is the only place that creates the
