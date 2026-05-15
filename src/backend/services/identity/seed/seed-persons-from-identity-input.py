@@ -729,9 +729,22 @@ def main():
         ),
         -- `state_transitions`: only rows where state CHANGED (or the
         -- very first observation). These are the boundary timestamps
-        -- of active intervals.
+        -- of active intervals. The LEAD here MUST run before the
+        -- WHERE is_active = 1 filter in `active_intervals` -- otherwise
+        -- the window operates on Active-only rows and never sees the
+        -- next Inactive row, leaving every interval_end = NULL even
+        -- when the employee was deactivated (cypilot-pr-review #477
+        -- Finding 1, latent bug that didn't surface in the kind-cluster
+        -- test only because BambooHR data had no Active->Inactive
+        -- transitions in the snapshot).
         state_transitions AS (
-            SELECT *
+            SELECT
+                insight_tenant_id, insight_source_type, insight_source_id, person_id,
+                created_at, id, is_active,
+                LEAD(created_at) OVER (
+                    PARTITION BY insight_tenant_id, insight_source_type, insight_source_id, person_id
+                    ORDER BY created_at, id
+                ) AS next_transition_at
             FROM state_log
             WHERE prev_is_active IS NULL OR prev_is_active <> is_active
         ),
@@ -742,11 +755,8 @@ def main():
         active_intervals AS (
             SELECT
                 insight_tenant_id, insight_source_type, insight_source_id, person_id,
-                created_at AS interval_start,
-                LEAD(created_at) OVER (
-                    PARTITION BY insight_tenant_id, insight_source_type, insight_source_id, person_id
-                    ORDER BY created_at, id
-                ) AS interval_end
+                created_at        AS interval_start,
+                next_transition_at AS interval_end
             FROM state_transitions
             WHERE is_active = 1
         ),

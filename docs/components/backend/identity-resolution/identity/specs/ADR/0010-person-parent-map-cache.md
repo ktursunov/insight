@@ -112,6 +112,20 @@ edges from a UNION of two queries:
    `person_parent_map`. Source 1 takes precedence when both sources
    have a row for the same partition (NOT EXISTS guard in Source 2).
 
+**Source 1 precedence is per-partition, not per-period.** The
+NOT EXISTS guard in Source 2 checks for *any* `parent_person_id`
+observation on the partition `(tenant, child, source_type, source_id)`
+— including superseded ones. If a future reconciliation service
+writes a `parent_person_id` at time T_resolve and then later writes
+a corrected one at T_correct, Source 2's `parent_email` rows for
+the same partition are **all** excluded, even periods that predate
+T_resolve. This is acceptable for Phase 1 because Source 1 is empty
+in the current pipeline; once reconciliation ships, the guard
+should be tightened to per-interval (intersect `parent_email`
+periods with the **gaps** in Source 1 coverage rather than excluding
+the partition wholesale). Tracked as a Phase-2/3 follow-up; not a
+correctness concern today.
+
 **Deactivation handling — active intervals.** Source 2's `valid_to`
 is intersected with the child's ACTIVE INTERVALS as derived from
 `value_type='status'` observations on the same (tenant, source_type,

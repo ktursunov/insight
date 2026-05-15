@@ -1,19 +1,31 @@
 -- Materialized SCD2 cache of parent→child relationships derived from
--- `persons` observations with `value_type='parent_person_id'`.
+-- `persons` by `seed-persons-from-identity-input.py` step 9. Edges
+-- come from two sources UNION-ed in the rebuild SQL:
+--
+--   Source 1: value_type='parent_person_id' observations (resolved
+--             Insight UUIDs written by a future reconciliation service
+--             — currently zero rows in the pipeline).
+--   Source 2: value_type='parent_email' observations resolved by JOIN
+--             to the latest value_type='email' observation per
+--             (tenant, email) partition, intersected with the child's
+--             active intervals derived from value_type='status'
+--             observations (Active / Inactive / Terminated).
+--
+-- Source 1 wins on partition collision via NOT EXISTS in Source 2.
+-- See ADR-0010 for the full algorithm.
 --
 -- Per-source-instance tree: an edge is scoped to one
--- (tenant, insight_source_type, insight_source_id) — the same person may
--- have different parents in BambooHR vs Zoom vs Slack, and that is
--- intentional. The rebuild logic in `seed-persons-from-identity-input.py`
--- step 9 derives edges from the latest `parent_person_id` observation
--- per `(tenant, person, source_type, source_id)` partition and produces
--- SCD2 valid_from/valid_to via LEAD() over the same partition (same
--- pattern as `account_person_map`).
+-- (tenant, insight_source_type, insight_source_id) — the same person
+-- may have different parents in BambooHR vs Zoom vs Slack, and that is
+-- intentional.
 --
 -- Phase 1 invariant: at most one CURRENT parent per
--- (tenant, source_type, source_id, child_person_id). The UNIQUE on
--- (..., child_person_id, valid_to) enforces this. Phase 1.5 multi-parent
--- per source would relax this by adding parent_person_id to the UNIQUE.
+-- (tenant, source_type, source_id, child_person_id), enforced by the
+-- PRIMARY KEY on (..., child_person_id, valid_from) together with the
+-- "at most one row with valid_to IS NULL per partition" rule the
+-- rebuild SQL maintains (no DB-level UNIQUE constraint on valid_to —
+-- enforcement is the rebuild's responsibility). Phase 1.5 multi-parent
+-- per source would relax this by adding parent_person_id to the PK.
 --
 -- See ADR-0010 and docs/components/backend/identity-resolution/identity
 -- /specs/DESIGN.md "Table: person_parent_map".

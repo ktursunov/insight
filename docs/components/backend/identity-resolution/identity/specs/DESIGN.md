@@ -534,7 +534,13 @@ Defined in `Insight.Identity.Infrastructure/Migrations/003_person_parent_map.sql
 (see ADR-0010). The service migrates and reads the table — the
 seed pipeline (`seed-persons-from-identity-input.py` step 9)
 rebuilds it as an SCD2 cache of direct parent->child edges
-derived from `persons` rows with `value_type='parent_person_id'`.
+derived from `persons` via two sources: `value_type='parent_person_id'`
+observations (Source 1, future reconciliation service) and
+`value_type='parent_email'` observations resolved by JOIN to the
+latest matching `value_type='email'` observation per tenant
+(Source 2, the current pipeline's only edge producer). Source 2
+intersects each parent_email period with the child's active
+intervals derived from `value_type='status'` observations.
 
 The Phase-1 invariant is at most one CURRENT edge per
 `(tenant, source_type, source_id, child)`; multi-parent (matrix
