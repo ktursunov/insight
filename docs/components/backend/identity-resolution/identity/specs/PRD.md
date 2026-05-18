@@ -361,8 +361,8 @@ in `LOWER()` to get the right answer.
 
 **Rationale**: Per ADR-0011, the original `utf8mb4_bin` collation
 on `value_id` made every comparison strictly case-sensitive — a
-production lookup for `Roman.Mitasov@constructor.tech` against a
-stored `roman.mitasov@constructor.tech` returned 404. Switching the
+production lookup for `Alice.Smith@company.com` against a
+stored `alice.smith@company.com` returned 404. Switching the
 column to `utf8mb4_unicode_ci` aligns the storage with how the
 platform conventionally compares emails and UUID strings, and
 removes a fragile per-caller contract.

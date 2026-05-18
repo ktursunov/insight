@@ -53,8 +53,8 @@ previously observed value is affected.
 value_type routed into `value_id` (per ADR-0007: `id`, `email`,
 `username`, `employee_id`, `parent_email`, `parent_id`,
 `parent_person_id`) is compared byte-for-byte. A lookup for
-`roman.mitasov@constructor.tech` does not match a stored
-`Roman.Mitasov@constructor.tech` even though both refer to the same
+`alice.smith@company.com` does not match a stored
+`Alice.Smith@company.com` even though both refer to the same
 person. The service partially mitigated this for the
 `GET /v1/persons/{email}` happy path by calling
 `email.Trim().ToLowerInvariant()` before the repository call
@@ -66,7 +66,7 @@ person. The service partially mitigated this for the
   account ids),
 - inserts that lowercase the input but not the stored value.
 
-The production lookup `https://insight-dev.constr.dev/api/identity/v1/persons/Roman.Mitasov%40constructor.tech`
+The production lookup `https://insight-dev.constr.dev/api/identity/v1/persons/Alice.Smith%40company.com`
 returns 404 specifically because of this collation choice.
 
 Both defects are corrections of original-design mistakes rather than
@@ -143,7 +143,7 @@ comparison semantics change.
   active-intervals CTE already handles re-activation correctly; the
   only blocker was Defect A. A follow-up commit on the
   person_parent_map branch unblocks them after this PR lands.
-- **Production lookup fix**: `GET /v1/persons/Roman.Mitasov@...` and
+- **Production lookup fix**: `GET /v1/persons/Alice.Smith@...` and
   similar mixed-case requests start returning 200 against existing
   data — no re-seed required. Existing mixed-case stored values
   remain bit-exact in storage but become equal under the
@@ -179,7 +179,7 @@ Confirmed by integration tests in
   — INSERT Active(T0), Inactive(T2), Active(T3) all succeed; persons
   has three rows. The old schema rejected the second Active.
 - `Persons_value_id_comparison_is_case_insensitive` — store
-  `'Roman.Mitasov@example.com'`, query `WHERE value_id = 'roman.mitasov@example.com'`,
+  `'Alice.Smith@company.com'`, query `WHERE value_id = 'alice.smith@company.com'`,
   the stored row is returned.
 - `Persons_insert_ignore_dedupes_on_same_created_at` — two INSERTs
   with identical `(tenant, person, source_type, source_id, value_type,
@@ -220,8 +220,8 @@ Confirmed by integration tests in
 - Bad, because every read SQL must be updated to `LOWER(value_id) =
   LOWER(@x)`; future SQL authors must remember this contract.
 - Bad, because the SHA-256 of two case-different values is different,
-  so the original UNIQUE would still treat `'Roman.Mitasov@...'` and
-  `'roman.mitasov@...'` as two distinct rows in persons, splitting
+  so the original UNIQUE would still treat `'Alice.Smith@...'` and
+  `'alice.smith@...'` as two distinct rows in persons, splitting
   one logical observation into two stored observations.
 
 ## More Information
