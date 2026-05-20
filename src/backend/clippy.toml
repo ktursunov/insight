@@ -50,6 +50,8 @@ doc-valid-idents = [
     "Kafka", "Postgres",
     # ─── Pipeline / scheduler vendor names ───────────────────────────
     "Airbyte", "Argo",
+    # ─── CRM / SaaS vendor names (connectors + seed code) ────────────
+    "HubSpot",
     # ─── Rust ecosystem we name in docs ──────────────────────────────
     "SeaORM",
     # ─── Infra / cloud-native ────────────────────────────────────────

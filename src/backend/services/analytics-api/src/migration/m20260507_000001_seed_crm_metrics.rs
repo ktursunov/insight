@@ -40,36 +40,32 @@ pub struct Migration;
 // UUIDs
 // ---------------------------------------------------------------------------
 
-const ZERO_TENANT:             &str = "00000000000000000000000000000000";
-const CRM_KPIS_ID:             &str = "00000000000000000001000000000020";
-const CRM_CHART_FLOW_ID:       &str = "00000000000000000001000000000021";
-const CRM_BULLET_QUALITY_ID:   &str = "00000000000000000001000000000022";
-const CRM_BULLET_ACTIVITY_ID:  &str = "00000000000000000001000000000023";
-const CRM_PIPELINE_NOW_ID:     &str = "00000000000000000001000000000028";
+const ZERO_TENANT: &str = "00000000000000000000000000000000";
+const CRM_KPIS_ID: &str = "00000000000000000001000000000020";
+const CRM_CHART_FLOW_ID: &str = "00000000000000000001000000000021";
+const CRM_BULLET_QUALITY_ID: &str = "00000000000000000001000000000022";
+const CRM_BULLET_ACTIVITY_ID: &str = "00000000000000000001000000000023";
+const CRM_PIPELINE_NOW_ID: &str = "00000000000000000001000000000028";
 
 // ---------------------------------------------------------------------------
 // Names + descriptions
 // ---------------------------------------------------------------------------
 
-const CRM_KPIS_NAME:            &str = "CRM KPIs";
-const CRM_CHART_FLOW_NAME:      &str = "CRM Chart Deal Flow";
-const CRM_BULLET_QUALITY_NAME:  &str = "CRM Bullet Velocity Quality";
+const CRM_KPIS_NAME: &str = "CRM KPIs";
+const CRM_CHART_FLOW_NAME: &str = "CRM Chart Deal Flow";
+const CRM_BULLET_QUALITY_NAME: &str = "CRM Bullet Velocity Quality";
 const CRM_BULLET_ACTIVITY_NAME: &str = "CRM Bullet Activity";
-const CRM_PIPELINE_NOW_NAME:    &str = "CRM Pipeline Now";
+const CRM_PIPELINE_NOW_NAME: &str = "CRM Pipeline Now";
 
 const CRM_KPIS_DESC: &str =
     "Sales rep KPIs from HubSpot: open/closed deals, won count + value, communications volume";
-const CRM_CHART_FLOW_DESC: &str =
-    "Weekly opened / closed / won deal counts per sales rep";
-const CRM_BULLET_QUALITY_DESC: &str =
-    "Sales velocity & quality bullet metrics: win rate, cycle days, avg deal size, \
+const CRM_CHART_FLOW_DESC: &str = "Weekly opened / closed / won deal counts per sales rep";
+const CRM_BULLET_QUALITY_DESC: &str = "Sales velocity & quality bullet metrics: win rate, cycle days, avg deal size, \
      deals opened — with team median/min/max for vs-team comparison.";
-const CRM_BULLET_ACTIVITY_DESC: &str =
-    "Sales outreach-activity bullet metrics: calls, emails, meetings volumes \
+const CRM_BULLET_ACTIVITY_DESC: &str = "Sales outreach-activity bullet metrics: calls, emails, meetings volumes \
      and comms-per-won-deal efficiency — with team median/min/max for \
      vs-team comparison.";
-const CRM_PIPELINE_NOW_DESC: &str =
-    "Open-deal snapshot per rep (count + summed amount_home). Stock metric — \
+const CRM_PIPELINE_NOW_DESC: &str = "Open-deal snapshot per rep (count + summed amount_home). Stock metric — \
      point-in-time, no date dimension.";
 
 // ---------------------------------------------------------------------------
@@ -203,11 +199,31 @@ GROUP BY p.metric_key";
 // ---------------------------------------------------------------------------
 
 const SEEDS: &[(&str, &str, &str, &str)] = &[
-    (CRM_KPIS_ID,            CRM_KPIS_NAME,            CRM_KPIS_DESC,            CRM_KPIS_QUERY),
-    (CRM_CHART_FLOW_ID,      CRM_CHART_FLOW_NAME,      CRM_CHART_FLOW_DESC,      CRM_CHART_FLOW_QUERY),
-    (CRM_BULLET_QUALITY_ID,  CRM_BULLET_QUALITY_NAME,  CRM_BULLET_QUALITY_DESC,  CRM_BULLET_QUALITY_QUERY),
-    (CRM_BULLET_ACTIVITY_ID, CRM_BULLET_ACTIVITY_NAME, CRM_BULLET_ACTIVITY_DESC, CRM_BULLET_ACTIVITY_QUERY),
-    (CRM_PIPELINE_NOW_ID,    CRM_PIPELINE_NOW_NAME,    CRM_PIPELINE_NOW_DESC,    CRM_PIPELINE_NOW_QUERY),
+    (CRM_KPIS_ID, CRM_KPIS_NAME, CRM_KPIS_DESC, CRM_KPIS_QUERY),
+    (
+        CRM_CHART_FLOW_ID,
+        CRM_CHART_FLOW_NAME,
+        CRM_CHART_FLOW_DESC,
+        CRM_CHART_FLOW_QUERY,
+    ),
+    (
+        CRM_BULLET_QUALITY_ID,
+        CRM_BULLET_QUALITY_NAME,
+        CRM_BULLET_QUALITY_DESC,
+        CRM_BULLET_QUALITY_QUERY,
+    ),
+    (
+        CRM_BULLET_ACTIVITY_ID,
+        CRM_BULLET_ACTIVITY_NAME,
+        CRM_BULLET_ACTIVITY_DESC,
+        CRM_BULLET_ACTIVITY_QUERY,
+    ),
+    (
+        CRM_PIPELINE_NOW_ID,
+        CRM_PIPELINE_NOW_NAME,
+        CRM_PIPELINE_NOW_DESC,
+        CRM_PIPELINE_NOW_QUERY,
+    ),
 ];
 
 #[async_trait::async_trait]
@@ -236,10 +252,8 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
         for (hex_id, _name, _desc, _query) in SEEDS {
-            db.execute_unprepared(&format!(
-                "DELETE FROM metrics WHERE id = UNHEX('{hex_id}')"
-            ))
-            .await?;
+            db.execute_unprepared(&format!("DELETE FROM metrics WHERE id = UNHEX('{hex_id}')"))
+                .await?;
         }
         Ok(())
     }
