@@ -242,7 +242,7 @@ ASP.NET Core types.
 - Configures Serilog (`CompactJsonFormatter`, `service=identity`
   enricher, PII-redacting request-logging callback).
 - Runs `MigrationRunner.Run` before opening the listener.
-- Maps `/v1/persons/{email}`, `/health`, `/healthz`.
+- Maps `/v1/persons/{email}` (**deprecated** — emits RFC 8594 `Deprecation: true` + `Link: </v1/profiles>; rel="successor-version"`; new callers use `POST /v1/profiles`), `POST /v1/profiles`, `/health`, `/healthz`.
 - Implements the global exception handler that emits RFC 7807
   bodies with sanitised `db_target` for DB exceptions only.
 

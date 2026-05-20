@@ -26,6 +26,13 @@ public static class PersonsEndpoints
             IOptions<AppOptions> options,
             CancellationToken cancellationToken) =>
         {
+            // Endpoint is deprecated: the email in the URL path leaks into
+            // observability surfaces outside this service. New callers go
+            // to POST /v1/profiles. RFC 8594 headers signal this on every
+            // response so existing integrations notice without action.
+            http.Response.Headers["Deprecation"] = "true";
+            http.Response.Headers.Append("Link", "</v1/profiles>; rel=\"successor-version\"");
+
             var tenantId = tenants.Resolve(http);
             if (tenantId is null)
             {

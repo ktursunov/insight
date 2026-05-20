@@ -764,7 +764,9 @@ this NFR forces the explicit bytes binding everywhere.
 
 **Type**: HTTP/REST endpoint.
 
-**Stability**: stable. Phase 2 of #348 added `supervisor_email`,
+**Stability**: **deprecated** — new integrations must use [`POST /v1/profiles`](#post-v1profiles--profile-resolution) instead. The path-form lookup keeps the caller's email in the URL, which leaks into observability surfaces this service does not control (api-gateway access logs, ingress logs, browser history, CDN/proxy logs) even though our own request-logging redacts the segment to `/v1/persons/<redacted>`. Existing callers continue to work; the service emits `Deprecation: true` and `Link: <…/v1/profiles>; rel="successor-version"` on every response per RFC 8594. Removal is scheduled with the cyber-insight v1 release cut.
+
+**Stability history**: Phase 2 of #348 added `supervisor_email`,
 `supervisor_name`, and the `subordinates[]` recursion onto the existing
 shape — both are additive (non-breaking) per the policy below.
 

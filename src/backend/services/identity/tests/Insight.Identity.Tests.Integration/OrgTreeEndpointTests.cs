@@ -47,6 +47,12 @@ public sealed class OrgTreeEndpointTests : IAsyncLifetime
             .ConfigureAwait(false);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
+        // RFC 8594 — endpoint deprecated; every response carries the
+        // signalling headers steering callers to POST /v1/profiles.
+        response.Headers.GetValues("Deprecation").Should().ContainSingle().Which.Should().Be("true");
+        response.Headers.GetValues("Link").Should().ContainSingle()
+            .Which.Should().Contain("/v1/profiles").And.Contain("rel=\"successor-version\"");
+
         var doc = await response.Content.ReadFromJsonAsync<JsonElement>().ConfigureAwait(false);
 
         doc.GetProperty("person_id").GetGuid().Should().Be(AlicePersonId);
