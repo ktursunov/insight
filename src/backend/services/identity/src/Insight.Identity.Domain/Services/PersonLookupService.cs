@@ -34,6 +34,9 @@ public sealed class PersonLookupService
         }
 
         var visited = new HashSet<Guid>();
+        // Observations are discarded — only the profile path needs them
+        // again (for the ids[] / Profile assembler). GetByEmail returns
+        // just the Person.
         var (root, _) = await HydrateAsync(tenantId, personId.Value, options, depth: 0, visited, cancellationToken)
             .ConfigureAwait(false);
         return root;

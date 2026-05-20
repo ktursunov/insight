@@ -222,38 +222,42 @@ public sealed class OrgTreeEndpointTests : IAsyncLifetime
         await using var conn = new MySqlConnection(_fixture.ConnectionString);
         await conn.OpenAsync().ConfigureAwait(false);
 
-        await InsertObservationAsync(conn, personId, "email",        email,         isValueId: true);
-        await InsertObservationAsync(conn, personId, "display_name", displayName,   isValueId: false, isFullText: true);
-        await InsertObservationAsync(conn, personId, "job_title",    jobTitle,      isValueId: false, isFullText: true);
-        await InsertObservationAsync(conn, personId, "status",       "Active",      isValueId: false);
-        await InsertObservationAsync(conn, personId, "id",           sourceNativeId, isValueId: true);
+        await InsertObservationAsync(conn, personId, "email",        email);
+        await InsertObservationAsync(conn, personId, "display_name", displayName);
+        await InsertObservationAsync(conn, personId, "job_title",    jobTitle);
+        await InsertObservationAsync(conn, personId, "status",       "Active");
+        await InsertObservationAsync(conn, personId, "id",           sourceNativeId);
     }
 
     private static async Task InsertObservationAsync(
         MySqlConnection conn,
         Guid personId,
         string valueType,
-        string value,
-        bool isValueId,
-        bool isFullText = false)
+        string value)
     {
-        const string sql = """
+        // ADR-0007: route by value_type so seeded rows match how the
+        // ingest pipeline writes them.
+        var col = valueType switch
+        {
+            "email" or "id" or "username" => "value_id",
+            "display_name" => "value_full_text",
+            _ => "value",
+        };
+        var sql = $"""
             INSERT IGNORE INTO persons
                 (value_type, insight_source_type, insight_source_id, insight_tenant_id,
-                 value_id, value_full_text, value,
+                 {col},
                  person_id, author_person_id, reason, created_at)
             VALUES
                 (@vt, 'bamboohr', @src, @tenant,
-                 @vid, @vft, @vraw,
+                 @val,
                  @person, @author, '', UTC_TIMESTAMP(6))
             """;
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@vt", valueType);
         cmd.Parameters.AddWithValue("@src", BambooSourceId.ToByteArray(bigEndian: true));
         cmd.Parameters.AddWithValue("@tenant", TenantId.ToByteArray(bigEndian: true));
-        cmd.Parameters.AddWithValue("@vid", isValueId ? value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@vft", isFullText ? value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@vraw", (!isValueId && !isFullText) ? value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@val", value);
         cmd.Parameters.AddWithValue("@person", personId.ToByteArray(bigEndian: true));
         cmd.Parameters.AddWithValue("@author", AuthorPersonId.ToByteArray(bigEndian: true));
         await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
