@@ -86,30 +86,37 @@ public static class RolesEndpoints
             var gate = await admin.CheckAsync(http, ct).ConfigureAwait(false);
             if (gate is not AdminCheckResult.IsAdmin) return EndpointHelpers.GateResult(gate);
 
+            // Pre-fetch for audit name + initial 404; not part of the
+            // guard. The atomic DELETE below owns the in-use check —
+            // `roles` is strict-minimum (no valid_to slot, see ADR-0013)
+            // so DELETE is hard and orphaning person_roles would be
+            // silent without an atomic refusal.
             var existing = await repo.GetRoleByIdAsync(id, ct).ConfigureAwait(false);
             if (existing is null) return EndpointHelpers.NotFound("role", id);
 
-            // `roles` is strict-minimum (no valid_to column) so DELETE
-            // is hard. Refuse if any active assignment references this
-            // role in any tenant — otherwise person_roles rows would
-            // be orphaned (no FK declared, see DESIGN §3.8).
-            var live = await repo.CountActiveAssignmentsByRoleAnyTenantAsync(id, ct).ConfigureAwait(false);
-            if (live > 0)
+            var rowsAffected = await repo.TryDeleteRoleIfUnusedAsync(id, ct).ConfigureAwait(false);
+            if (rowsAffected == 1)
             {
-                return Results.Json(new ProblemResponse(
-                    Type: RoleInUseUrn,
-                    Title: "Unprocessable Entity",
-                    Status: StatusCodes.Status422UnprocessableEntity,
-                    Detail: $"role has {live} active assignment(s); revoke them before deletion"),
-                    statusCode: StatusCodes.Status422UnprocessableEntity);
+                EndpointHelpers.Audit(loggerFactory, "roles.delete",
+                    ("role_id", id),
+                    ("name", existing.Name),
+                    ("author_person_id", EndpointHelpers.ResolveCaller(http)!.Value));
+                return Results.NoContent();
             }
 
-            await repo.DeleteRoleAsync(id, ct).ConfigureAwait(false);
-            EndpointHelpers.Audit(loggerFactory, "roles.delete",
-                ("role_id", id),
-                ("name", existing.Name),
-                ("author_person_id", EndpointHelpers.ResolveCaller(http)!.Value));
-            return Results.NoContent();
+            // rowsAffected == 0: either the role vanished between
+            // pre-fetch and DELETE (treat as 404) or the in-use guard
+            // fired (422). A second read + count tells us which and
+            // supplies the assignment count for the 422 message.
+            var refetched = await repo.GetRoleByIdAsync(id, ct).ConfigureAwait(false);
+            if (refetched is null) return EndpointHelpers.NotFound("role", id);
+            var live = await repo.CountActiveAssignmentsByRoleAnyTenantAsync(id, ct).ConfigureAwait(false);
+            return Results.Json(new ProblemResponse(
+                Type: RoleInUseUrn,
+                Title: "Unprocessable Entity",
+                Status: StatusCodes.Status422UnprocessableEntity,
+                Detail: $"role has {live} active assignment(s); revoke them before deletion"),
+                statusCode: StatusCodes.Status422UnprocessableEntity);
         });
 
         return app;

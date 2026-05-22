@@ -59,33 +59,64 @@ small tenants with a single ops user.
 
 ## Decision Outcome
 
-**Chosen: (A).** Block at the endpoint level.
+**Chosen: (A).** Block at the endpoint level via a single atomic SQL
+UPDATE — the guard count and the write live in one statement so two
+concurrent admin revokes cannot both slip past a stale check (TOCTOU).
 
-Implementation in `PersonRolesEndpoints` (DELETE handler):
+```sql
+UPDATE person_roles AS target
+JOIN (
+    SELECT
+        pr.person_role_id,
+        pr.role_id,
+        (
+            SELECT COUNT(*) FROM person_roles AS adm
+            WHERE adm.insight_tenant_id = pr.insight_tenant_id
+              AND adm.role_id           = @admin_role_id
+              AND adm.valid_to IS NULL
+        ) AS active_admin_cnt
+    FROM person_roles AS pr
+    WHERE pr.person_role_id = @person_role_id AND pr.valid_to IS NULL
+) AS row_with_count
+  ON row_with_count.person_role_id = target.person_role_id
+SET target.valid_to = UTC_TIMESTAMP(6),
+    target.reason   = COALESCE(@reason, target.reason)
+WHERE target.valid_to IS NULL
+  AND (
+      row_with_count.role_id <> @admin_role_id
+      OR row_with_count.active_admin_cnt > 1
+  )
+```
+
+The endpoint pre-fetches the row for audit metadata, then inspects
+`rows_affected`:
 
 ```csharp
-if (existing.RoleId == Roles.Admin && existing.ValidTo is null)
-{
-    var activeAdmins = await repo
-        .CountActiveByRoleAsync(existing.InsightTenantId, Roles.Admin, ct);
-    if (activeAdmins <= 1)
-    {
-        return Results.Json(new ProblemResponse(
-            Type: "urn:insight:error:last_admin_protected",
-            Title: "Unprocessable Entity",
-            Status: 422,
-            Detail: "cannot revoke the last active admin assignment in this tenant"),
-            statusCode: 422);
-    }
-}
-await repo.SoftDeletePersonRoleAsync(id, body?.Reason, ct);
+var existing = await repo.GetPersonRoleByIdAsync(id, ct);
+if (existing is null || existing.ValidTo is not null) return NotFound;
+
+var rowsAffected = await repo.TrySoftDeletePersonRoleProtectingLastAdminAsync(
+    id, Roles.Admin, body?.Reason, ct);
+if (rowsAffected == 1) { audit(…); return 204; }
+
+// rowsAffected == 0 → re-read disambiguates 404 vs 422.
+var refetched = await repo.GetPersonRoleByIdAsync(id, ct);
+if (refetched is null || refetched.ValidTo is not null) return NotFound;
+return 422 last_admin_protected;
 ```
+
+The single derived table (`row_with_count`) computes both the row-to-
+revoke metadata AND the tenant's active-admin count in one materialised
+result. MariaDB resolves the correlated COUNT inside the derived
+table's SELECT list before the outer UPDATE acts, so the "cannot
+SELECT from the table being updated" restriction does not bite.
 
 The guard activates only when the row being revoked is an active
 admin assignment. Non-admin role revokes (e.g. a future `auditor`)
-skip the guard entirely.
+skip the OR-branch entirely — the `role_id <> @admin_role_id` clause
+short-circuits the count subquery.
 
-`CountActiveByRoleAsync` uses the `idx_role_current (insight_tenant_id,
+The COUNT path uses the `idx_role_current (insight_tenant_id,
 role_id, valid_to)` index — single bounded lookup, near-zero cost.
 
 ### Consequences
@@ -148,7 +179,7 @@ will mint the row on the next pod start.
 ## Traceability
 
 - Endpoint: `src/backend/services/identity/src/Insight.Identity.Api/Endpoints/PersonRolesEndpoints.cs`
-- SQL: `SqlRoles.CountActivePersonRolesByRole`
+- SQL: `SqlRoles.TrySoftDeletePersonRoleProtectingLastAdmin`
 - Tests: `OrgChartVisibilityEndpointsTests.PersonRoles_revoke_last_admin_returns_422_last_admin_protected`,
   `OrgChartVisibilityEndpointsTests.PersonRoles_revoke_admin_when_another_admin_exists_succeeds`
 - Related: ADR-0012 (admin-only reads), ADR-0013 (roles hard-delete guard)

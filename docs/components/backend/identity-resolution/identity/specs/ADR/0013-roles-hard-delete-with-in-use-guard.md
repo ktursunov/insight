@@ -66,25 +66,39 @@ those rows.
 
 **Chosen: (A).** Hard DELETE with active-assignment guard.
 
-Implementation in `RolesEndpoints.MapRoleEndpoints` (DELETE handler):
+The guard and the write happen in a **single atomic SQL statement** —
+no separate `COUNT` round-trip — so two concurrent admin DELETEs
+cannot both pass a stale count and both succeed (TOCTOU). The DELETE
+is conditional on `NOT EXISTS (… active assignments …)`:
 
-```csharp
-var live = await repo.CountActiveAssignmentsByRoleAnyTenantAsync(id, ct);
-if (live > 0)
-{
-    return Results.Json(new ProblemResponse(
-        Type: "urn:insight:error:role_in_use",
-        Title: "Unprocessable Entity",
-        Status: 422,
-        Detail: $"role has {live} active assignment(s); revoke them before deletion"),
-        statusCode: 422);
-}
-await repo.DeleteRoleAsync(id, ct);
+```sql
+DELETE FROM roles
+WHERE role_id = @role_id
+  AND NOT EXISTS (
+      SELECT 1 FROM person_roles
+      WHERE role_id = @role_id AND valid_to IS NULL
+  )
 ```
 
-`CountActiveAssignmentsByRoleAnyTenantAsync` counts `person_roles WHERE
-role_id = @id AND valid_to IS NULL` across every tenant — orphaning
-in any tenant breaks the system.
+The endpoint inspects `rows_affected`:
+
+```csharp
+var existing = await repo.GetRoleByIdAsync(id, ct);             // for audit + initial 404
+if (existing is null) return NotFound("role", id);
+
+var rowsAffected = await repo.TryDeleteRoleIfUnusedAsync(id, ct);
+if (rowsAffected == 1) { audit(…); return 204; }
+
+// rowsAffected == 0 → re-read disambiguates 404 vs 422.
+var refetched = await repo.GetRoleByIdAsync(id, ct);
+if (refetched is null) return NotFound("role", id);
+var live = await repo.CountActiveAssignmentsByRoleAnyTenantAsync(id, ct);
+return 422 role_in_use with live count;
+```
+
+The disambiguation re-read is benign — it only chooses between two
+already-correct deny responses; the integrity invariant (no orphan
+`person_roles`) is enforced by the atomic statement.
 
 ### Consequences
 
@@ -143,6 +157,6 @@ admin protection.
 ## Traceability
 
 - Endpoint: `src/backend/services/identity/src/Insight.Identity.Api/Endpoints/RolesEndpoints.cs`
-- SQL: `SqlRoles.DeleteRole`, `SqlRoles.CountActivePersonRolesByRoleAnyTenant`
+- SQL: `SqlRoles.TryDeleteRoleIfUnused`, `SqlRoles.CountActivePersonRolesByRoleAnyTenant` (the latter only for the 422 message disambiguation, not for the guard itself)
 - Tests: `OrgChartVisibilityEndpointsTests.Roles_delete_in_use_returns_422_role_in_use`,
   `OrgChartVisibilityEndpointsTests.Roles_create_and_delete_round_trip`

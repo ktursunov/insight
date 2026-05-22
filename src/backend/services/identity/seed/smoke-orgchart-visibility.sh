@@ -23,7 +23,7 @@
 #                        prove the 403 branch of CallerAdminCheck.
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8082}"
+: "${BASE_URL:?BASE_URL required, e.g. http://localhost:8082}"
 : "${TENANT_ID:?TENANT_ID required}"
 : "${ADMIN_PERSON_ID:?ADMIN_PERSON_ID required}"
 VIEWER_PERSON_ID="${VIEWER_PERSON_ID:-$(uuidgen)}"

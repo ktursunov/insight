@@ -66,10 +66,17 @@ public sealed class RolesRepository : IRolesReader, IPersonRolesReader
         return roleId;
     }
 
-    public async Task<int> DeleteRoleAsync(Guid roleId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Atomic hard-delete of a role: refuses the write when any active
+    /// <c>person_roles</c> row references the role (orphan guard, see
+    /// ADR-0013). Returns <c>1</c> on success, <c>0</c> when either the
+    /// role is gone or the guard fired — the caller disambiguates with
+    /// a second read.
+    /// </summary>
+    public async Task<int> TryDeleteRoleIfUnusedAsync(Guid roleId, CancellationToken cancellationToken)
     {
         await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var cmd = new MySqlCommand(SqlRoles.DeleteRole, conn);
+        await using var cmd = new MySqlCommand(SqlRoles.TryDeleteRoleIfUnused, conn);
         cmd.Parameters.AddWithValue("@role_id", roleId.ToByteArray(bigEndian: true));
         return await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -185,11 +192,25 @@ public sealed class RolesRepository : IRolesReader, IPersonRolesReader
         return personRoleId;
     }
 
-    public async Task<int> SoftDeletePersonRoleAsync(Guid personRoleId, string? reason, CancellationToken cancellationToken)
+    /// <summary>
+    /// Atomic soft-delete of a <c>person_roles</c> row with last-admin
+    /// protection (see ADR-0014). Single UPDATE: the guard and the
+    /// write happen in the same statement, so there is no read-check-
+    /// write window for two concurrent admin revokes to slip through.
+    /// Returns <c>1</c> on success, <c>0</c> when the row is already
+    /// revoked / missing OR the last-admin guard fired — the caller
+    /// disambiguates with a second read.
+    /// </summary>
+    public async Task<int> TrySoftDeletePersonRoleProtectingLastAdminAsync(
+        Guid personRoleId,
+        Guid adminRoleId,
+        string? reason,
+        CancellationToken cancellationToken)
     {
         await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var cmd = new MySqlCommand(SqlRoles.SoftDeletePersonRole, conn);
+        await using var cmd = new MySqlCommand(SqlRoles.TrySoftDeletePersonRoleProtectingLastAdmin, conn);
         cmd.Parameters.AddWithValue("@person_role_id", personRoleId.ToByteArray(bigEndian: true));
+        cmd.Parameters.AddWithValue("@admin_role_id",  adminRoleId.ToByteArray(bigEndian: true));
         cmd.Parameters.AddWithValue("@reason",         reason is null ? (object)DBNull.Value : reason);
         return await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

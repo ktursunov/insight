@@ -86,35 +86,44 @@ public static class PersonRolesEndpoints
             var gate = await admin.CheckAsync(http, ct).ConfigureAwait(false);
             if (gate is not AdminCheckResult.IsAdmin) return EndpointHelpers.GateResult(gate);
 
+            // Pre-fetch for audit metadata (person_id / role_id /
+            // tenant); not part of the guard. The atomic UPDATE below
+            // owns the last-admin check — two concurrent admin revokes
+            // can no longer both slip past a separate COUNT query.
             var existing = await repo.GetPersonRoleByIdAsync(id, ct).ConfigureAwait(false);
-            if (existing is null) return EndpointHelpers.NotFound("person_role", id);
-
-            // Last-admin protection: refuse to revoke the only active
-            // admin assignment in the tenant; otherwise the tenant
-            // becomes un-administrable until ops re-runs bootstrap.
-            if (existing.RoleId == Roles.Admin && existing.ValidTo is null)
+            if (existing is null || existing.ValidTo is not null)
             {
-                var activeAdmins = await repo
-                    .CountActiveByRoleAsync(existing.InsightTenantId, Roles.Admin, ct)
-                    .ConfigureAwait(false);
-                if (activeAdmins <= 1)
-                {
-                    return Results.Json(new ProblemResponse(
-                        Type: LastAdminProtectedUrn,
-                        Title: "Unprocessable Entity",
-                        Status: StatusCodes.Status422UnprocessableEntity,
-                        Detail: "cannot revoke the last active admin assignment in this tenant"),
-                        statusCode: StatusCodes.Status422UnprocessableEntity);
-                }
+                return EndpointHelpers.NotFound("person_role", id);
             }
 
-            await repo.SoftDeletePersonRoleAsync(id, body?.Reason, ct).ConfigureAwait(false);
-            EndpointHelpers.Audit(loggerFactory, "person_roles.revoke",
-                ("person_role_id", id),
-                ("person_id", existing.PersonId),
-                ("role_id", existing.RoleId),
-                ("author_person_id", EndpointHelpers.ResolveCaller(http)!.Value));
-            return Results.NoContent();
+            var rowsAffected = await repo
+                .TrySoftDeletePersonRoleProtectingLastAdminAsync(id, Roles.Admin, body?.Reason, ct)
+                .ConfigureAwait(false);
+
+            if (rowsAffected == 1)
+            {
+                EndpointHelpers.Audit(loggerFactory, "person_roles.revoke",
+                    ("person_role_id", id),
+                    ("person_id", existing.PersonId),
+                    ("role_id", existing.RoleId),
+                    ("author_person_id", EndpointHelpers.ResolveCaller(http)!.Value));
+                return Results.NoContent();
+            }
+
+            // rowsAffected == 0: either the row was revoked between
+            // pre-fetch and UPDATE (treat as 404) or the last-admin
+            // guard fired (422). A second read tells us which.
+            var refetched = await repo.GetPersonRoleByIdAsync(id, ct).ConfigureAwait(false);
+            if (refetched is null || refetched.ValidTo is not null)
+            {
+                return EndpointHelpers.NotFound("person_role", id);
+            }
+            return Results.Json(new ProblemResponse(
+                Type: LastAdminProtectedUrn,
+                Title: "Unprocessable Entity",
+                Status: StatusCodes.Status422UnprocessableEntity,
+                Detail: "cannot revoke the last active admin assignment in this tenant"),
+                statusCode: StatusCodes.Status422UnprocessableEntity);
         });
 
         return app;
