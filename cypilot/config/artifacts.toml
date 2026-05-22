@@ -685,6 +685,21 @@ kind = "ADR"
 path = "docs/components/backend/identity-resolution/identity/specs/ADR/0011-persons-relax-uniqueness-and-collation.md"
 name = "ADR-0011: Persons Relax UNIQUE and Switch value_id Collation"
 
+[[systems.artifacts]]
+kind = "ADR"
+path = "docs/components/backend/identity-resolution/identity/specs/ADR/0012-admin-only-orgchart-visibility-reads.md"
+name = "ADR-0012: Admin-Only Reads on OrgChart Visibility Tables"
+
+[[systems.artifacts]]
+kind = "ADR"
+path = "docs/components/backend/identity-resolution/identity/specs/ADR/0013-roles-hard-delete-with-in-use-guard.md"
+name = "ADR-0013: roles Table Hard DELETE Guarded by Active-Assignment Count"
+
+[[systems.artifacts]]
+kind = "ADR"
+path = "docs/components/backend/identity-resolution/identity/specs/ADR/0014-last-admin-protection.md"
+name = "ADR-0014: Last-Admin Protection on person_roles Revoke"
+
 [[systems]]
 name = "Orchestrator"
 slug = "orch"
