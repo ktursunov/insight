@@ -1,5 +1,6 @@
 //! `MariaDB` connection and repository.
 
+pub mod check_probe;
 pub mod entities;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};

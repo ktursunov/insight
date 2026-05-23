@@ -71,6 +71,13 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     // Run pending migrations
     infra::db::run_migrations(&db).await?;
 
+    // Refuse to start if any required CHECK constraint is missing. Our
+    // bitnami-shipped MariaDB is 11.x, but on customer-managed DBs (BYO-DB
+    // installs, RDS, Cloud SQL, on-prem) we can't audit the version or
+    // `sql_mode`. See `infra/db/check_probe` and DESIGN §2.2
+    // `cpt-metric-cat-constraint-mariadb-check` for the full rationale.
+    infra::db::check_probe::assert_required_checks(&db).await?;
+
     // Connect to ClickHouse
     let mut ch_config =
         insight_clickhouse::Config::new(&cfg.clickhouse_url, &cfg.clickhouse_database);

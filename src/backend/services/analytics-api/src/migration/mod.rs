@@ -11,6 +11,12 @@ mod m20260515_000001_task_delivery_bullet_rewrite;
 mod m20260518_000001_collab_bullet_rewrite;
 mod m20260519_000001_ai_bullet_rewrite;
 mod m20260520_000001_code_quality_bullet_rewrite;
+mod m20260522_000001_metric_catalog;
+mod m20260522_000002_metric_threshold;
+mod m20260522_000003_threshold_lock_audit;
+
+#[cfg(test)]
+mod live_tests;
 
 use sea_orm_migration::prelude::*;
 
@@ -31,6 +37,29 @@ impl MigratorTrait for Migrator {
             Box::new(m20260518_000001_collab_bullet_rewrite::Migration),
             Box::new(m20260519_000001_ai_bullet_rewrite::Migration),
             Box::new(m20260520_000001_code_quality_bullet_rewrite::Migration),
+            Box::new(m20260522_000001_metric_catalog::Migration),
+            Box::new(m20260522_000002_metric_threshold::Migration),
+            Box::new(m20260522_000003_threshold_lock_audit::Migration),
         ]
     }
 }
+
+/// Per-table CHECK constraint names that the startup probe asserts present.
+///
+/// Source of truth for the probe in `infra/db/check_probe.rs`. Each entry maps
+/// a table name to the CHECK names the corresponding migration emits. Keep in
+/// sync with the `REQUIRED_CHECKS` const in each migration module.
+pub const REQUIRED_CHECKS_BY_TABLE: &[(&str, &[&str])] = &[
+    (
+        "metric_catalog",
+        m20260522_000001_metric_catalog::REQUIRED_CHECKS,
+    ),
+    (
+        "metric_threshold",
+        m20260522_000002_metric_threshold::REQUIRED_CHECKS,
+    ),
+    (
+        "threshold_lock_audit",
+        m20260522_000003_threshold_lock_audit::REQUIRED_CHECKS,
+    ),
+];
