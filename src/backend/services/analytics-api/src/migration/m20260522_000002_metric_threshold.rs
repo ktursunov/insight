@@ -20,6 +20,15 @@
 //!   has no native partial indexes; the lock-enforcer's "find broader-scope
 //!   locked row" lookup uses `(tenant_id, metric_key, scope, is_locked_persisted)`
 //!   as the supported workaround. See DESIGN §3.7 lines 1021, 1041.
+//! - **No `FOREIGN KEY (metric_key) REFERENCES metric_catalog(metric_key)`**
+//!   in v1. This is deliberate per DESIGN §3.7 line 309 ("Metric 1 — N
+//!   Threshold by `metric_key`. No FK in v1 ...; CRUD validates that
+//!   `metric_key` exists and is `is_enabled = true` before allowing a write
+//!   per `cpt-metric-cat-fr-threshold-crud`"). The audit row's "loose
+//!   pointer" treatment in §3.7 lines 310-311 explicitly relies on
+//!   audit-survives-deletion-of-parent semantics; an FK would break that
+//!   contract. If a future revision tightens this, amend §3.7 first via
+//!   ADR — adding the FK silently is the wrong move.
 //! - CHECK names below match `REQUIRED_CHECKS` and the startup probe.
 
 use sea_orm_migration::prelude::*;

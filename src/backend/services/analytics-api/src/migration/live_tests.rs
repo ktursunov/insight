@@ -221,7 +221,61 @@ async fn catalog_schema_end_to_end() -> anyhow::Result<()> {
         ));
     }
 
-    // ── invariant 7: probe rejects a DB where a CHECK has been dropped ──
+    // ── invariant 7: audit-scope CHECKs enforced ─────────────────────
+    //
+    // The two scope columns on `threshold_lock_audit` are domain-constrained
+    // by CHECK so the forensic record cannot collect garbage strings (a
+    // direct SQL insert, emitter bug, or ORM regression would otherwise
+    // poison `GROUP BY attempted_scope` histograms). A `bypass_attempt`
+    // event with `attempted_scope = 'not-a-scope'` MUST be rejected; a
+    // canonical scope value MUST succeed.
+    let bad_attempted_scope = db
+        .execute_unprepared(&format!(
+            "INSERT INTO threshold_lock_audit \
+             (id, event_type, actor_subject, tenant_id, metric_key, attempted_scope, event_at) \
+             VALUES (UNHEX(REPLACE(UUID(),'-','')), 'bypass_attempt', 'svc-test', \
+                     UNHEX(REPLACE(UUID(),'-','')), '{TEST_METRIC_KEY}', 'not-a-scope', NOW())"
+        ))
+        .await;
+    if bad_attempted_scope.is_ok() {
+        failures.push(
+            "non-canonical attempted_scope MUST violate \
+             chk_threshold_lock_audit_attempted_scope"
+                .to_owned(),
+        );
+    }
+    let bad_blocking_scope = db
+        .execute_unprepared(&format!(
+            "INSERT INTO threshold_lock_audit \
+             (id, event_type, actor_subject, tenant_id, metric_key, blocking_scope, event_at) \
+             VALUES (UNHEX(REPLACE(UUID(),'-','')), 'bypass_attempt', 'svc-test', \
+                     UNHEX(REPLACE(UUID(),'-','')), '{TEST_METRIC_KEY}', 'wrong-value', NOW())"
+        ))
+        .await;
+    if bad_blocking_scope.is_ok() {
+        failures.push(
+            "non-canonical blocking_scope MUST violate \
+             chk_threshold_lock_audit_blocking_scope"
+                .to_owned(),
+        );
+    }
+    // Positive case: a canonical scope succeeds; NULL also succeeds.
+    let good_audit_row = db
+        .execute_unprepared(&format!(
+            "INSERT INTO threshold_lock_audit \
+             (id, event_type, actor_subject, tenant_id, metric_key, attempted_scope, blocking_scope, event_at) \
+             VALUES (UNHEX(REPLACE(UUID(),'-','')), 'bypass_attempt', 'svc-test', \
+                     UNHEX(REPLACE(UUID(),'-','')), '{TEST_METRIC_KEY}', 'tenant', 'product-default', NOW())"
+        ))
+        .await;
+    if let Err(e) = good_audit_row {
+        failures.push(format!(
+            "canonical attempted_scope='tenant' / blocking_scope='product-default' \
+             MUST be accepted by the audit-scope CHECKs; got: {e}"
+        ));
+    }
+
+    // ── invariant 8: probe rejects a DB where a CHECK has been dropped ──
     db.execute_unprepared(
         "ALTER TABLE metric_catalog DROP CONSTRAINT chk_metric_catalog_tenant_id_null",
     )
@@ -239,7 +293,7 @@ async fn catalog_schema_end_to_end() -> anyhow::Result<()> {
         }
     }
 
-    // ── invariant 8: drop-and-re-up round-trip ───────────────────────
+    // ── invariant 9: drop-and-re-up round-trip ───────────────────────
     //
     // Migrations are forward-only (`down()` returns an error in every
     // catalog migration on purpose), so this isn't a `Migrator::down →
