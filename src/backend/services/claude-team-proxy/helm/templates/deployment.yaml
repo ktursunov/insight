@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "claude-team-proxy.fullname" . }}
+  labels:
+    {{- include "claude-team-proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Make sure restarts replace the existing pod 1-by-1; with a single
+  # replica and Chromium re-init taking ~30s, this is mostly cosmetic
+  # but keeps the rolling-update behaviour explicit.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "claude-team-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "claude-team-proxy.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      # Match the `node` user baked into node:22-slim (UID/GID 1000).
+      # The Dockerfile already `USER node`s, this is belt-and-braces.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          # SESSION_KEY comes from the Secret created by secret.yaml.
+          # envFrom mounts ALL keys in the Secret as env vars — currently
+          # just SESSION_KEY, but easy to extend later.
+          envFrom:
+            - secretRef:
+                name: {{ include "claude-team-proxy.fullname" . }}
+          # Non-secret config is plain env. Empty string means "use the
+          # default baked into src/config.js".
+          env:
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: HEADLESS
+              value: {{ .Values.headless | quote }}
+            {{- if .Values.upstreamBaseUrl }}
+            - name: UPSTREAM_BASE_URL
+              value: {{ .Values.upstreamBaseUrl | quote }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Chromium needs to spawn child processes (renderer, gpu).
+            # capabilities: drop ALL is too strict — leaves CAP_DAC_OVERRIDE
+            # in the default set is fine since runAsNonRoot caps damage.
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
