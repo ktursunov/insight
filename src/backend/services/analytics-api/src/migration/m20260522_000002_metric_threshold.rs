@@ -190,14 +190,14 @@ impl MigrationTrait for Migration {
             "ALTER TABLE metric_threshold \
              ADD COLUMN tenant_id_sentinel BINARY(16) \
              GENERATED ALWAYS AS (COALESCE(tenant_id, 0x00000000000000000000000000000000)) \
-             STORED NOT NULL",
+             STORED",
         )
         .await?;
 
         conn.execute_unprepared(
             "ALTER TABLE metric_threshold \
              ADD COLUMN is_locked_persisted BOOLEAN \
-             GENERATED ALWAYS AS (is_locked) STORED NOT NULL",
+             GENERATED ALWAYS AS (is_locked) STORED",
         )
         .await?;
 
