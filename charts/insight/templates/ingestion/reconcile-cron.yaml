@@ -16,7 +16,13 @@ metadata:
     workflows.argoproj.io/controller-instanceid: {{ . | quote }}
     {{- end }}
 spec:
-  schedule: {{ required "ingestion.reconcile.schedule is required" .Values.ingestion.reconcile.schedule | quote }}
+  # `schedules:` (array) is the Argo Workflows >=3.5 schema. The legacy
+  # singular `schedule:` field is rejected by the new CRD with
+  # `.spec.schedule: field not declared in schema` during server-side
+  # apply. We render the user-supplied string (kept singular in values
+  # for ergonomics) as a one-element array.
+  schedules:
+    - {{ required "ingestion.reconcile.schedule is required" .Values.ingestion.reconcile.schedule | quote }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
   # Bound history at the CronWorkflow level so the per-tick Workflows
