@@ -43,6 +43,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/metrics/{id}/query",
             axum::routing::post(handlers::query_metric),
         )
+        .route(
+            "/v1/metrics/queries",
+            axum::routing::post(handlers::query_metrics_batch),
+        )
         // Thresholds
         .route(
             "/v1/metrics/{id}/thresholds",

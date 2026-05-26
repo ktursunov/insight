@@ -7,7 +7,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use modkit_canonical_errors::CanonicalError;
+use modkit_canonical_errors::{CanonicalError, Problem};
 use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, NotSet, QueryFilter, Set};
 use uuid::Uuid;
 
@@ -17,7 +17,9 @@ use crate::auth::SecurityContext;
 use crate::domain::metric::{
     CreateMetricRequest, Metric, MetricSummary, TableColumn, UpdateMetricRequest,
 };
-use crate::domain::query::{PageInfo, QueryRequest, QueryResponse};
+use crate::domain::query::{
+    BatchQueryRequest, BatchQueryResponse, BatchQueryResult, PageInfo, QueryRequest, QueryResponse,
+};
 use crate::domain::threshold;
 use crate::domain::threshold::{CreateThresholdRequest, Threshold, UpdateThresholdRequest};
 use crate::infra::db::entities;
@@ -189,15 +191,55 @@ pub async fn delete_metric(
 
 // ── Query ───────────────────────────────────────────────────
 
-#[allow(clippy::too_many_lines)]
 pub async fn query_metric(
     State(state): State<Arc<AppState>>,
     Extension(ctx): Extension<SecurityContext>,
     Path(id): Path<Uuid>,
     Json(req): Json<QueryRequest>,
 ) -> Result<impl IntoResponse, CanonicalError> {
+    let response = execute_metric_query(&state, &ctx, id, req).await?;
+    Ok(Json(response))
+}
+
+pub async fn query_metrics_batch(
+    State(state): State<Arc<AppState>>,
+    Extension(ctx): Extension<SecurityContext>,
+    Json(req): Json<BatchQueryRequest>,
+) -> Result<impl IntoResponse, CanonicalError> {
+    let tasks = req.queries.into_iter().map(|item| {
+        let state = state.clone();
+        let ctx = ctx.clone();
+        async move {
+            let id = item.id;
+            let metric_id = item.metric_id;
+            match execute_metric_query(&state, &ctx, metric_id, item.query).await {
+                Ok(response) => BatchQueryResult::Ok {
+                    id,
+                    metric_id,
+                    response,
+                },
+                Err(err) => BatchQueryResult::Error {
+                    id,
+                    metric_id,
+                    error: Problem::from(err),
+                },
+            }
+        }
+    });
+
+    let results = futures::future::join_all(tasks).await;
+    Ok(Json(BatchQueryResponse { results }))
+}
+
+#[allow(clippy::too_many_lines)]
+async fn execute_metric_query(
+    state: &Arc<AppState>,
+    ctx: &SecurityContext,
+    id: Uuid,
+    req: QueryRequest,
+) -> Result<QueryResponse, CanonicalError> {
     // 1. Load metric definition (must be enabled)
-    let metric = find_enabled_metric(&state, ctx.insight_tenant_id, id).await?;
+    let metric = find_enabled_metric(state, ctx.insight_tenant_id, id).await?;
 
     // 2. Validate $top
     let top = req.top.clamp(1, 200);
@@ -398,15 +440,13 @@ pub async fn query_metric(
         all_rows.into_iter().map(round_floats).collect()
     };
 
-    let response = QueryResponse {
+    Ok(QueryResponse {
         items,
         page_info: PageInfo {
             has_next,
             cursor: None,
         },
-    };
-
-    Ok(Json(response))
+    })
 }
 
 /// Round all float values in a JSON object to 4 decimal places.

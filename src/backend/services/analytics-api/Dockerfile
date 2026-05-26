@@ -4,7 +4,7 @@
 # Usage: cd src/backend && docker build -f services/analytics-api/Dockerfile -t insight-analytics-api:dev .
 
 # Stage 1: Builder
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.95-bookworm AS builder
 
 WORKDIR /build
 

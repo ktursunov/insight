@@ -39,6 +39,7 @@ anyhow = "1.0"
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
 async-trait = "0.1"
+futures = "0.3"
 
 # Web framework
 axum = "0.8"

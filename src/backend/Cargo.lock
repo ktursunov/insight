@@ -153,6 +153,7 @@ dependencies = [
  "chrono",
  "clap",
  "figment",
+ "futures",
  "insight-clickhouse",
  "redis",
  "reqwest",

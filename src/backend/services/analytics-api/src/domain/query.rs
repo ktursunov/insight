@@ -1,6 +1,8 @@
 //! Query request/response models — `OData`-style per DNA REST conventions.
 
+use modkit_canonical_errors::Problem;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Query request body for `POST /v1/metrics/{id}/query`.
 ///
@@ -48,4 +50,38 @@ pub struct QueryResponse {
 pub struct PageInfo {
     pub has_next: bool,
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchQueryItem {
+    pub id: Option<String>,
+    pub metric_id: Uuid,
+    #[serde(flatten)]
+    pub query: QueryRequest,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchQueryRequest {
+    pub queries: Vec<BatchQueryItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum BatchQueryResult {
+    Ok {
+        id: Option<String>,
+        metric_id: Uuid,
+        #[serde(flatten)]
+        response: QueryResponse,
+    },
+    Error {
+        id: Option<String>,
+        metric_id: Uuid,
+        error: Problem,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchQueryResponse {
+    pub results: Vec<BatchQueryResult>,
 }
