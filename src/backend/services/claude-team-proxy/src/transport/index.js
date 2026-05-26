@@ -77,6 +77,7 @@ import { createPlaywrightTransport } from './playwright.js';
  *   upstreamBaseUrl: string,
  *   headless: boolean,
  *   startupTimeoutMs: number,
+ *   fetchTimeoutMs: number,
  * }} config
  * @returns {AuthedTransport}
  */
@@ -89,6 +90,7 @@ export function createTransport(config) {
         upstreamBaseUrl: config.upstreamBaseUrl,
         headless: config.headless,
         startupTimeoutMs: config.startupTimeoutMs,
+        fetchTimeoutMs: config.fetchTimeoutMs,
       });
     default:
       throw new Error(`Unknown transport kind: ${kind}`);

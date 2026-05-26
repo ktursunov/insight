@@ -25,6 +25,7 @@
   - [Date Cursor for code_metrics](#date-cursor-for-code_metrics)
   - [403 Graceful Handling](#403-graceful-handling)
   - [Pagination](#pagination)
+  - [Operational Limitations (MVP)](#operational-limitations-mvp)
   - [Idempotence](#idempotence)
   - [Run Logging and Observability](#run-logging-and-observability)
   - [Assumptions and Risks That Affect Implementation](#assumptions-and-risks-that-affect-implementation)
@@ -134,9 +135,14 @@ overrides (`start_date`, `proxy_url`, `insight_source_id`).
 - **`claude.ai`'s web API is undocumented and unstable.** Schema changes are detected only at
   sync time via Airbyte's type-coercion errors. The connector's response schemas are derived
   from observed responses.
-- **Single replica.** `strategy.maxUnavailable: 0, maxSurge: 1` so rolling updates spin up a
-  new pod, wait for it to be ready, then drop the old one — no overlap, no double-session on
-  `claude.ai`'s side.
+- **Single replica with create-before-destroy.** `strategy.maxUnavailable: 0, maxSurge: 1`
+  means a rolling update spins up a new pod and waits for it to be `Ready` before draining the
+  old one. There is a brief overlap window (~30s, while the new pod runs through Chromium
+  boot + CF clearance) during which two browser sessions share the same `sessionKey` against
+  `claude.ai`. Empirically this has not triggered session-sweep or rate-limit, but the
+  alternative `maxSurge: 0 / maxUnavailable: 1` (brief downtime, no overlap) is one Helm
+  upgrade away if it ever does — the connector tolerates transient 502/504 from the proxy via
+  Airbyte's default retry policy.
 
 ## 3. Technical Architecture
 
@@ -562,6 +568,51 @@ Two pagination styles, one per applicable stream:
 
 `claude_team_members` and `claude_team_invites` return the full set in one response; no
 pagination configured.
+
+### Operational Limitations (MVP)
+
+Two known operational corners that v1.0 trades against simplicity. Both are flagged
+during PR #536 review by @dzarlax; both are deliberate scope decisions, not bugs.
+
+**1. `/health` reports init-once, not live-operational.** `transport.isReady()`
+flips to `true` once at the end of `init()` and is never re-validated. If, between
+init and the next sync:
+
+- the `sessionKey` cookie expires (claude.ai issues 401 on `/api/*`),
+- Cloudflare changes its posture and starts re-issuing challenges, OR
+- the Chromium process partially dies (zygote alive but a child segfaulted),
+
+…the readiness probe still passes and the pod stays in Service rotation. The
+operator finds out only when a sync fails. Mitigation paths if this becomes
+painful in production:
+
+- Active probe — `/health` makes a cheap upstream call (e.g. `GET /api/organizations`)
+  every N seconds and caches the result. Trades upstream load for liveness fidelity.
+- Sidecar — separate prober pod that pings `/api/*` periodically and bumps an
+  `is_operational` flag in the proxy's state. Decouples probing cost from the
+  hot path.
+
+Out of scope for v1.0 because sync cadence is hourly-to-daily and a stale-ready
+pod fails at next sync, which the operator already monitors via Airbyte.
+
+**2. Cloudflare-clearance detection is title-string-based.** The proxy waits for
+`!document.title.includes('Just a moment')` — fragile. Cloudflare can change the
+interstitial wording, the page structure, or move to a CAPTCHA tier at any time
+without notice; the `waitForFunction` would either return immediately (false
+clearance, subsequent requests 403) or hang to the startup-timeout (pod won't
+become ready). Mitigation when this happens:
+
+- Lightweight authenticated upstream probe — after the title check, issue a
+  `GET /api/organizations` from the page context; require HTTP 200 + JSON body
+  before flipping `ready=true`. Robust to interstitial-wording changes but
+  costs one upstream call per pod start.
+- Browser-engine swap — replace Playwright + stealth with CloakBrowser CDP,
+  which patches the bot detection at the Chromium source level rather than via
+  JS injection. The `AuthedTransport` seam (§3.2) makes this a one-file change.
+
+Out of scope for v1.0 because no Cloudflare changes observed to date and the
+detection has been stable for the kind / staging soak window. Flagged here so
+the operator does not assume the detection is more robust than it is.
 
 ### Idempotence
 

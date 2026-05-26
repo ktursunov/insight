@@ -6,9 +6,15 @@ metadata:
     {{- include "claude-team-proxy.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # Make sure restarts replace the existing pod 1-by-1; with a single
-  # replica and Chromium re-init taking ~30s, this is mostly cosmetic
-  # but keeps the rolling-update behaviour explicit.
+  # Create-before-destroy rolling update. With maxSurge=1 and
+  # maxUnavailable=0, during a rollout there are briefly TWO pods —
+  # the new one running through Chromium boot + CF clearance, then the
+  # old one is terminated once the new is Ready. From claude.ai's side
+  # this means a short window (~30s) with two browser sessions sharing
+  # the same sessionKey. If session-sweep / rate-limit ever becomes a
+  # concern, flip to maxSurge=0 / maxUnavailable=1 (brief downtime,
+  # no overlap) — the connector retries on transient 502/504 so the
+  # cost is acceptable.
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -57,9 +63,21 @@ spec:
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
-            # Chromium needs to spawn child processes (renderer, gpu).
-            # capabilities: drop ALL is too strict — leaves CAP_DAC_OVERRIDE
-            # in the default set is fine since runAsNonRoot caps damage.
+            # Aggressive capability drop. Chromium running as non-root
+            # does not need Linux capabilities to spawn its renderer /
+            # GPU child processes — chrome-sandbox is replaced by the
+            # user-namespace sandbox (zygote model), which is namespace-
+            # gated, not capability-gated.
+            #
+            # Per CR feedback on PR #536 (replaces a previous "drop ALL
+            # is too strict" comment that was an unverified assertion).
+            # Operator should verify on first rollout that boot + CF
+            # clearance + at least one stream sync all succeed; if
+            # something breaks under drop:[ALL], comment out the block
+            # to fall back to default capabilities and file a follow-up.
+            capabilities:
+              drop:
+                - ALL
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

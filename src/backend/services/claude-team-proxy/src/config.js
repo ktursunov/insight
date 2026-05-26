@@ -17,6 +17,11 @@
  *   browser window while debugging.
  * @property {number} startupTimeoutMs - max time to wait for transport.init()
  *   (browser launch + Cloudflare clearance). Default 60s.
+ * @property {number} fetchTimeoutMs - max time to wait for a single upstream
+ *   fetch via page.evaluate. Bounded so a stalled upstream cannot leave a
+ *   request indefinitely in-flight. Default 45s — covers the observed
+ *   worst-case (claude.ai's /api/claude_code/metrics_aggs/users at ~13s)
+ *   with generous headroom.
  */
 
 /**
@@ -37,8 +42,9 @@ export function loadConfig() {
 
   const headless = parseBoolEnv('HEADLESS', true);
   const startupTimeoutMs = parseIntEnv('STARTUP_TIMEOUT_MS', 60_000);
+  const fetchTimeoutMs = parseIntEnv('FETCH_TIMEOUT_MS', 45_000);
 
-  return { sessionKey, upstreamBaseUrl, port, headless, startupTimeoutMs };
+  return { sessionKey, upstreamBaseUrl, port, headless, startupTimeoutMs, fetchTimeoutMs };
 }
 
 function parseUrlEnv(name, defaultValue) {

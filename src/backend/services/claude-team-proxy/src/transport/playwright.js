@@ -27,6 +27,7 @@ chromium.use(StealthPlugin());
  *   upstreamBaseUrl: string,
  *   headless: boolean,
  *   startupTimeoutMs: number,
+ *   fetchTimeoutMs: number,
  * }} cfg
  * @returns {import('./index.js').AuthedTransport}
  */
@@ -138,31 +139,60 @@ export function createPlaywrightTransport(cfg) {
       // Return shape constrained to {status, body, headers} so it
       // matches the AuthedTransport contract; we don't bubble up the
       // full Response object.
+      //
+      // Timeout: the fetch is wrapped in AbortController so a stalled
+      // upstream (Cloudflare hang, Anthropic outage) does not leave
+      // the request indefinitely in-flight. On timeout the in-page
+      // code returns `{timeout: true}`; we translate that to a
+      // throw on the Node side per the AuthedTransport contract
+      // (transport-level failures throw; non-2xx HTTP does not).
       const result = await page.evaluate(
-        async ({ fetchUrl, extraHeaders }) => {
-          const response = await fetch(fetchUrl, {
-            credentials: 'include',
-            headers: {
-              'Cache-Control': 'no-cache, no-store',
-              ...extraHeaders,
-            },
-          });
-          // Headers.entries() is iterable; spread into a plain object
-          // for transport boundary (page.evaluate output must be JSON-
-          // serialisable).
-          const headers = {};
-          for (const [k, v] of response.headers.entries()) {
-            headers[k.toLowerCase()] = v;
+        async ({ fetchUrl, extraHeaders, timeoutMs }) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(fetchUrl, {
+              credentials: 'include',
+              signal: controller.signal,
+              headers: {
+                'Cache-Control': 'no-cache, no-store',
+                ...extraHeaders,
+              },
+            });
+            // Headers.entries() is iterable; spread into a plain object
+            // for transport boundary (page.evaluate output must be JSON-
+            // serialisable).
+            const headers = {};
+            for (const [k, v] of response.headers.entries()) {
+              headers[k.toLowerCase()] = v;
+            }
+            return {
+              status: response.status,
+              body: await response.text(),
+              headers,
+            };
+          } catch (err) {
+            // AbortError on timeout → signal to Node-side via timeout flag.
+            // Any other Error (network failure inside the page, DNS, etc.)
+            // bubbles a structured error envelope back; Node side
+            // translates to a transport-level throw.
+            if (err.name === 'AbortError') {
+              return { timeout: true };
+            }
+            return { error: err.message || String(err) };
+          } finally {
+            clearTimeout(timer);
           }
-          return {
-            status: response.status,
-            body: await response.text(),
-            headers,
-          };
         },
-        { fetchUrl: url, extraHeaders: opts.headers ?? {} },
+        { fetchUrl: url, extraHeaders: opts.headers ?? {}, timeoutMs: cfg.fetchTimeoutMs },
       );
 
+      if (result.timeout) {
+        throw new Error(`fetch timeout after ${cfg.fetchTimeoutMs}ms: ${url}`);
+      }
+      if (result.error) {
+        throw new Error(`fetch failed: ${result.error}`);
+      }
       return result;
     },
 

@@ -100,8 +100,11 @@ async function handleProxy(res, transport, reqUrl) {
       upstream: upstreamUrl,
       error: err.message,
     });
-    return respond(res, 502, {
-      error: 'upstream unreachable',
+    // Distinguish timeout (504) from generic transport failure (502)
+    // so callers can apply different retry/backoff policies.
+    const isTimeout = err.message?.startsWith('fetch timeout');
+    return respond(res, isTimeout ? 504 : 502, {
+      error: isTimeout ? 'upstream timeout' : 'upstream unreachable',
       detail: err.message,
     });
   }

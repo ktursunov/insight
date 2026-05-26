@@ -30,6 +30,7 @@ async function main() {
     upstreamBaseUrl: config.upstreamBaseUrl,
     headless: config.headless,
     startupTimeoutMs: config.startupTimeoutMs,
+    fetchTimeoutMs: config.fetchTimeoutMs,
   });
 
   // 2) Create transport object — no I/O happens here.
@@ -38,6 +39,7 @@ async function main() {
     upstreamBaseUrl: config.upstreamBaseUrl,
     headless: config.headless,
     startupTimeoutMs: config.startupTimeoutMs,
+    fetchTimeoutMs: config.fetchTimeoutMs,
   });
 
   // 3) Start HTTP server BEFORE transport.init(). Critical for k8s:
