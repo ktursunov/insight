@@ -142,7 +142,7 @@ FROM (
     ORDER BY _airbyte_extracted_at DESC
     LIMIT 1 BY meeting_uuid, participant_uuid, join_time
 ) AS p
-LEFT JOIN {{ ref('zoom__meeting_sessions') }} FINAL AS ml
+LEFT JOIN {{ ref('zoom__meeting_sessions') }} AS ml FINAL
     ON p.meeting_uuid = ml.uuid
     AND p.tenant_id = ml.tenant_id
     AND p.source_id = ml.source_id

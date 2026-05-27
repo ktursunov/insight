@@ -67,7 +67,7 @@ FROM (
     ORDER BY _airbyte_extracted_at DESC
     LIMIT 1 BY tenant_id, source_id, uniq
 ) AS m
-LEFT JOIN {{ source('bronze_zulip_proxy', 'users') }} FINAL AS u
+LEFT JOIN {{ source('bronze_zulip_proxy', 'users') }} AS u FINAL
     ON u.tenant_id = m.tenant_id
     AND u.source_id = m.source_id
     AND u.id = m.sender_id
