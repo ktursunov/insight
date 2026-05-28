@@ -13,11 +13,12 @@ models:
       Bronze → Silver step 1: Claude Team per-user per-day Claude Code usage
       → class_ai_dev_usage. Sourced from claude_team_code_metrics (daily
       aggregates pulled via the customer-deployed claude-team-proxy from the
-      claude.ai web API). One row per (tenant, email, metric_date). Email is
-      always non-NULL (the API returns per-user rows; rows without an email are
-      dropped). session_count from total_sessions; lines_added from
-      total_lines_accepted; pull_requests_count from total_prs;
-      prs_with_cc_count from prs_with_cc.
+      claude.ai web API). Filtered to status='active' AND non-empty email.
+      One row per (tenant, email, metric_date).
+      session_count ← total_sessions; lines_added ← total_lines_accepted;
+      cost_cents ← total_cost (decimal-as-string → cents, first per-user-per-day
+      cost source in Silver); prs_with_cc_count ← prs_with_cc;
+      prs_total_count ← total_prs.
     columns:
       - name: insight_tenant_id
         tests:
@@ -48,7 +49,9 @@ models:
               arguments:
                 values: ['claude_code']
       - name: session_count
-        description: "total_sessions from the claude.ai metrics API"
+        description: >
+          total_sessions. DQ note: may be 0 for headless/cc-p invocations
+          even when lines_added > 0 — Anthropic excludes those from the counter.
         tests:
           - not_null
       - name: lines_added
@@ -56,38 +59,48 @@ models:
         tests:
           - not_null
       - name: lines_removed
-        description: "Always 0 — Claude Team does not surface AI-removed lines"
-        tests:
-          - not_null
+        description: "Always NULL — Claude Team does not surface AI-removed lines (structural, not zero)"
       - name: total_lines_added
         description: "Always NULL — total keystrokes not available from the web API"
       - name: total_lines_removed
         description: "Always NULL — total keystrokes not available from the web API"
       - name: tool_use_offered
-        description: "Always NULL — inline-completion counters not surfaced by the web API"
+        description: "Always NULL — inline-completion counters not surfaced by the Team plan API"
       - name: tool_use_accepted
-        description: "Always NULL — inline-completion counters not surfaced by the web API"
+        description: "Always NULL — inline-completion counters not surfaced by the Team plan API"
       - name: agent_sessions
         description: "Always NULL — not exposed by the claude.ai team metrics endpoint"
       - name: chat_requests
         description: "Always NULL — not exposed by the claude.ai team metrics endpoint"
       - name: cost_cents
-        description: "Always NULL — cost is org-level subscription, not per-user"
+        description: >
+          total_cost cast to cents: toUInt32(round(toFloat64(total_cost) * 100)).
+          Claude Team is the first source in Silver with per-user-per-day cost.
+          NULL when total_cost IS NULL or not parseable.
       - name: commits_count
-        description: "Always NULL — git commit counts not available in the web API"
+        description: "Always NULL — git commit counts not available in the Team plan API"
       - name: pull_requests_count
-        description: "total_prs — total PRs in the measurement window"
+        description: >
+          Always NULL — pull_requests_count is Enterprise-specific
+          (code_pull_request_count). Claude Team PR counts use prs_total_count.
       - name: prs_with_cc_count
-        description: "prs_with_cc — PRs where Claude Code was active at least once"
+        description: >
+          prs_with_cc — PRs where Claude Code was active at least once.
+          Requires Anthropic GitHub-app to be connected; NULL / 0 on orgs without it.
+      - name: prs_total_count
+        description: >
+          total_prs — total PRs in the measurement window. Denominator for
+          prs_with_cc_percentage. ⚠️ May be period-aggregate (cumulative),
+          not daily — verify against a tenant with the GitHub-app connected.
       - name: tool_action_breakdown_json
         description: "Always NULL — per-tool-type breakdown not exposed by the web API"
       - name: source
-        description: "Always 'claude_playwright'"
+        description: "Always 'claude_team'"
         tests:
           - not_null
           - accepted_values:
               arguments:
-                values: ['claude_playwright']
+                values: ['claude_team']
       - name: data_source
         description: "Passed through from bronze (always 'insight_claude_team')"
         tests:
