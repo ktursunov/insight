@@ -1,5 +1,6 @@
 //! HTTP API layer — routes and handlers.
 
+pub(crate) mod admin;
 pub(crate) mod canonical_json;
 mod catalog;
 pub(crate) mod error;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 
 use crate::auth;
 use crate::config::AppConfig;
+use crate::domain::admin_threshold::AdminThresholdService;
 use crate::domain::auth::TenantAuthorization;
 use crate::domain::catalog::CatalogReader;
 use crate::domain::schema_validator::SchemaValidator;
@@ -28,19 +30,25 @@ pub struct AppState {
     #[allow(dead_code)] // will be used for runtime config access (rate limits, feature flags)
     pub config: AppConfig,
     /// Schema-validator (Refs #521). Held in `AppState` so admin-crud (#525)
-    /// can call `validator.validate(metric_key)` after a successful threshold
-    /// write. Not currently consumed by any handler in this PR.
-    #[allow(dead_code)] // wired in #525; #521 only exposes the function
+    /// calls `validator.validate(metric_key)` after a successful threshold
+    /// write. Kept on `AppState` for the legacy /v1/metrics handlers'
+    /// future use too; admin-crud receives its own clone via
+    /// [`AdminThresholdService::new`].
+    #[allow(dead_code)] // admin-crud holds its own clone; #521 only exposes the function
     pub validator: SchemaValidator,
-    /// Catalog auth-trait (Refs #522). Resolves session-bound tenant against
-    /// the operator-configured single-tenant fallback per
-    /// `cpt-metric-cat-constraint-tenant-default`. Consumed by
-    /// `auth::tenant_middleware`; #525 will consume it directly for
-    /// `is_tenant_admin` / `actor_subject` (out of scope here).
+    /// Catalog auth-trait. Resolves session-bound tenant against the
+    /// operator-configured single-tenant fallback per
+    /// `cpt-metric-cat-constraint-tenant-default` (Refs #522). Consumed by
+    /// `auth::tenant_middleware` AND `AdminThresholdService` (Refs #525) for
+    /// `is_tenant_admin` / `actor_subject`.
     pub tenant_auth: Arc<dyn TenantAuthorization>,
     /// Catalog read pipeline (Refs #524) — cache + resolver wired together.
     /// Cheap to clone (internally `Arc`s the cache + resolver).
     pub catalog_reader: CatalogReader,
+    /// Admin-CRUD service (Refs #525) — owns the 5 `/v1/admin/metric-thresholds/*`
+    /// endpoints, the validation gauntlet, the `lock-enforcer` SQL, and the
+    /// `audit-emitter` dual-sink contract.
+    pub admin_threshold: AdminThresholdService,
 }
 
 /// Build the Axum router with all routes.
@@ -105,6 +113,21 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/catalog/get_metrics",
             axum::routing::post(catalog::get_metrics),
+        )
+        // Admin threshold CRUD (Refs #525) — DESIGN §3.2 admin-crud.
+        // Bearer-token-only auth at the gateway (Q1 ack); the catalog
+        // surface enforces canonical envelopes + CSRF closure via the
+        // `CanonicalJson` extractor (Content-Type: application/json
+        // required, deny_unknown_fields on every body shape).
+        .route(
+            "/v1/admin/metric-thresholds",
+            axum::routing::get(admin::list).post(admin::create),
+        )
+        .route(
+            "/v1/admin/metric-thresholds/{id}",
+            axum::routing::get(admin::get_one)
+                .put(admin::update)
+                .delete(admin::delete),
         )
         // Health
         .route("/health", axum::routing::get(handlers::health));

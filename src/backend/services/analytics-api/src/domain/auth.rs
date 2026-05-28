@@ -2,9 +2,12 @@
 //!
 //! Models the auth dependency as a Rust trait so the catalog's release
 //! readiness is not blocked on the Auth service delivery (DESIGN §2.2
-//! `cpt-metric-cat-constraint-auth-trait`, §3.2 auth-trait). v1 ships
-//! `resolve_tenant` only — `is_tenant_admin` / `actor_subject` arrive in
-//! later PRs (#524 / #525) when the read and admin paths consume them.
+//! `cpt-metric-cat-constraint-auth-trait`, §3.2 auth-trait). The trait
+//! surface mirrors what catalog components need:
+//!
+//! - `resolve_tenant` (Refs #522) — resolves the request's effective tenant.
+//! - `is_tenant_admin` (Refs #525) — gates the admin write path.
+//! - `actor_subject` (Refs #525) — populates `threshold_lock_audit.actor_subject`.
 //!
 //! ## Single-tenant fallback (`cpt-metric-cat-constraint-tenant-default`)
 //!
@@ -15,6 +18,19 @@
 //! `ANALYTICS__metric_catalog__tenant_default_id`) is used; multi-tenant
 //! installs leave it unset and tenant-less requests fail with a canonical
 //! `invalid_argument` envelope carried by `TENANT_UNRESOLVED`.
+//!
+//! ## Admin gate is a STUB until real Auth wires in
+//!
+//! `ConfigTenantAuthorization::is_tenant_admin` returns `true` for every
+//! resolved session. This matches the DESIGN's literal "stub" wording
+//! (`cpt-metric-cat-constraint-auth-trait`) and unblocks the catalog
+//! release; production deployment MUST swap this implementation for the
+//! real Auth-service-backed one before going live, otherwise the admin
+//! CRUD surface is open to any authenticated tenant member. The catalog
+//! never relies on the stub being correct for security; the admin path is
+//! also defended at the DB-row level (cross-tenant writes are rejected
+//! because the row's `tenant_id` mismatch surfaces a `not_tenant_admin`
+//! envelope regardless of what `is_tenant_admin` returns).
 //!
 //! ## Security invariant
 //!
@@ -27,19 +43,48 @@
 
 use uuid::Uuid;
 
-/// Resolves the effective tenant for a request.
+use crate::auth::SecurityContext;
+
+/// Stable principal identifier used in `threshold_lock_audit.actor_subject`.
+/// Distinct type from `Uuid::sub` / arbitrary header value so a future swap
+/// to the real Auth wiring (which surfaces an opaque `sub` claim) is a
+/// trait-level change instead of a string-typed signature drift.
+pub type ActorSubject = String;
+
+/// Resolves the effective tenant for a request and adjudicates admin authz
+/// + audit-actor identity for catalog components.
 ///
-/// Precedence: `session → configured default → None`. Callers treat `None`
-/// as a 400 `invalid_argument` per `cpt-metric-cat-constraint-tenant-default`.
+/// Tenant precedence: `session → configured default → None`. Callers treat
+/// `None` as a 400 `invalid_argument` per
+/// `cpt-metric-cat-constraint-tenant-default`.
 pub trait TenantAuthorization: Send + Sync {
     /// `session_tenant`: the tenant attached to the session by upstream auth
     /// (today: the `X-Insight-Tenant-Id` header stub; eventually the JWT
     /// `insight_tenant_id` claim). `None` when the session carries no tenant.
     fn resolve_tenant(&self, session_tenant: Option<Uuid>) -> Option<Uuid>;
+
+    /// True iff the caller in `ctx` is authorized as a tenant-admin for
+    /// `tenant_id`. The catalog's admin CRUD surface (#525) gates every
+    /// write through this. Returning `false` causes the caller to emit a
+    /// canonical `permission_denied` envelope with `reason = "not_tenant_admin"`.
+    ///
+    /// `tenant_id` is the target tenant for the operation — usually
+    /// `ctx.insight_tenant_id`, but callers MAY pass the row's
+    /// `tenant_id` to catch cross-tenant writes here too. v1 stub does not
+    /// distinguish the two; both routes converge on the same DB-row
+    /// tenant check at the repository layer.
+    fn is_tenant_admin(&self, tenant_id: Uuid, ctx: &SecurityContext) -> bool;
+
+    /// Stable principal identifier for `ctx`. Surfaced in
+    /// `threshold_lock_audit.actor_subject` and the structured-log stream
+    /// (DESIGN §3.7 — explicitly NOT a session token; sessions rotate but
+    /// audit retention is ≥ 1 year).
+    fn actor_subject(&self, ctx: &SecurityContext) -> ActorSubject;
 }
 
 /// Configuration-driven implementation: returns the session tenant when
-/// present, otherwise falls back to the operator-configured default.
+/// present, otherwise falls back to the operator-configured default. The
+/// admin gate is a stub (see module doc-comment).
 pub struct ConfigTenantAuthorization {
     default: Option<Uuid>,
 }
@@ -68,6 +113,20 @@ impl TenantAuthorization for ConfigTenantAuthorization {
         // the module doc-comment and the `session_wins_over_configured_default`
         // unit test below.
         session_tenant.or(self.default)
+    }
+
+    fn is_tenant_admin(&self, _tenant_id: Uuid, _ctx: &SecurityContext) -> bool {
+        // Stub: every resolved session is treated as tenant-admin until the
+        // real Auth wiring lands. See module doc-comment.
+        true
+    }
+
+    fn actor_subject(&self, ctx: &SecurityContext) -> ActorSubject {
+        // Stub: surface the placeholder `subject_id` (filled with `Uuid::nil()`
+        // by `tenant_middleware` today). When JWT validation lands, the
+        // middleware will populate this with the verified `sub` claim and
+        // this method passes it through unchanged.
+        ctx.subject_id.to_string()
     }
 }
 
@@ -116,5 +175,45 @@ mod tests {
         let auth = ConfigTenantAuthorization::new(Some(Uuid::nil()));
         assert_eq!(auth.resolve_tenant(None), None);
         assert_eq!(auth.resolve_tenant(Some(T1)), Some(T1));
+    }
+
+    fn ctx(tenant: Uuid, subject: Uuid) -> SecurityContext {
+        SecurityContext {
+            subject_id: subject,
+            insight_tenant_id: tenant,
+        }
+    }
+
+    #[test]
+    fn stub_grants_admin_for_every_resolved_session() {
+        // The v1 stub returns `true` unconditionally. This pins that
+        // behaviour so a refactor that adds gating logic without wiring
+        // the real Auth backend trips the test — silently flipping to
+        // "deny by default" would brick the admin surface in dev/staging
+        // and silently change production behaviour the moment real Auth
+        // lands. The right path is to land the real impl as a separate
+        // `TenantAuthorization` implementor, not to reshape the stub.
+        let auth = ConfigTenantAuthorization::new(None);
+        assert!(auth.is_tenant_admin(T1, &ctx(T1, Uuid::nil())));
+        // Even when target tenant ≠ session tenant the stub returns true;
+        // cross-tenant rejection lives at the row-tenant check in the
+        // admin repository, not in the stub.
+        assert!(auth.is_tenant_admin(T2, &ctx(T1, Uuid::nil())));
+    }
+
+    #[test]
+    fn actor_subject_passes_through_security_context_subject_id() {
+        // Today `subject_id` is `Uuid::nil()` (filled by `tenant_middleware`
+        // until JWT validation lands). When real JWT lands the middleware
+        // populates `subject_id` with the verified `sub` claim and this
+        // method passes it through unchanged — audit rows / log lines pick
+        // up the real principal automatically.
+        let auth = ConfigTenantAuthorization::new(None);
+        let subject = Uuid::from_u128(0x9999_9999_9999_9999_9999_9999_9999_9999_u128);
+        assert_eq!(
+            auth.actor_subject(&ctx(T1, subject)),
+            subject.to_string(),
+            "actor_subject MUST reflect ctx.subject_id verbatim"
+        );
     }
 }

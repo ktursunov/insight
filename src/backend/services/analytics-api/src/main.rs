@@ -22,6 +22,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use crate::domain::admin_threshold::AdminThresholdService;
 use crate::domain::auth::ConfigTenantAuthorization;
 use crate::domain::catalog::{CatalogReader, ThresholdResolver};
 use crate::infra::cache::catalog_cache::{CatalogCache, NoopCatalogCache, RedisCatalogCache};
@@ -139,6 +140,12 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     let catalog_reader =
         CatalogReader::new(catalog_cache.clone(), ThresholdResolver::new(db.clone()));
 
+    // Admin-CRUD service (Refs #525). Composes the lock-enforcer +
+    // audit-emitter + cache + schema-validator behind the validation
+    // gauntlet documented at `domain::admin_threshold::service`.
+    // Constructor is moved below `validator` + `tenant_auth` because it
+    // borrows both — see further down.
+
     // Connect to ClickHouse
     let mut ch_config =
         insight_clickhouse::Config::new(&cfg.clickhouse_url, &cfg.clickhouse_database);
@@ -156,11 +163,20 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     // startup pass.
     let validator = domain::schema_validator::SchemaValidator::new(db.clone(), ch.clone());
 
-    // Catalog auth-trait (Refs #522). Today only `resolve_tenant` is wired
-    // — `is_tenant_admin` / `actor_subject` arrive with #524 / #525.
-    let tenant_auth = Arc::new(ConfigTenantAuthorization::new(
-        cfg.metric_catalog.tenant_default_id,
-    ));
+    // Catalog auth-trait (Refs #522 / #525). v1 stub: `is_tenant_admin`
+    // returns true unconditionally — see `domain::auth` module doc-comment.
+    // Production deployment MUST swap this for the real-Auth implementation.
+    let tenant_auth: Arc<dyn crate::domain::auth::TenantAuthorization> = Arc::new(
+        ConfigTenantAuthorization::new(cfg.metric_catalog.tenant_default_id),
+    );
+
+    // Admin-CRUD service (Refs #525).
+    let admin_threshold = AdminThresholdService::new(
+        db.clone(),
+        tenant_auth.clone(),
+        catalog_cache.clone(),
+        validator.clone(),
+    );
 
     // Build app state
     let state = api::AppState {
@@ -171,6 +187,7 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
         validator: validator.clone(),
         tenant_auth,
         catalog_reader,
+        admin_threshold,
     };
 
     // Build router

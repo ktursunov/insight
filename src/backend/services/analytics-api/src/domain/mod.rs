@@ -1,3 +1,4 @@
+pub mod admin_threshold;
 pub mod auth;
 pub mod catalog;
 pub mod metric;
