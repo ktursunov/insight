@@ -121,7 +121,14 @@ spec:
                 - name: clickhouse_user
                   value: {{ `"{{inputs.parameters.clickhouse_user}}"` }}
 
-          # ------ Non-Jira: legacy single-dbt path ------
+          # ------ Non-Jira: single-dbt path, scoped to this connector ------
+          # Selector is derived from the connector slug as `tag:<connector>+`:
+          # this connector's staging models plus everything downstream
+          # (silver class_*, fct_*, mtr_*) reachable via dbt-graph edges.
+          # Sister connectors stay sideways in the graph and are skipped, so a
+          # connector whose bronze sources are absent on this tenant cannot fail
+          # the run. The incoming `dbt_select` param is intentionally ignored
+          # here — name-derived scoping does not depend on it being populated.
           - name: transform-legacy
             depends: sync
             when: {{ `"'{{inputs.parameters.data_source}}' != 'jira'"` }}
@@ -131,7 +138,7 @@ spec:
             arguments:
               parameters:
                 - name: dbt_select
-                  value: {{ `"{{inputs.parameters.dbt_select}}"` }}
+                  value: {{ `"tag:{{inputs.parameters.data_source}}+"` }}
                 - name: dbt_full_refresh
                   value: {{ `"{{inputs.parameters.dbt_full_refresh}}"` }}
                 - name: toolbox_image
