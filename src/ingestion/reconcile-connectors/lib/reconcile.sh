@@ -672,35 +672,44 @@ reconcile_connections() {
 }
 
 # ---------------------------------------------------------------------------
-# reconcile_refresh_catalog <connector_name> <source_id> <connection_id>
+# reconcile_refresh_catalog <connector_name> <source_id> <connection_id> [force_fresh]
 # Per ADR-0015 / cpt-insightspec-algo-reconcile-refresh-catalog-on-republish:
-# called whenever the definition was republished and a connection already
-# exists. Re-discovers the source schema, normalizes append-only with
-# every stream and field selected, then POSTs /connections/update to PATCH
-# the sync_catalog in place. State (per-stream cursors) survives the
-# update because Airbyte keys state on (connectionId, streamName), not on
-# catalog shape.
-# Returns 0 on success or noop (dry-run / connection_id empty), 1 on
-# discover or update failure.
+# keeps a connection's sync_catalog in step with the schema the source
+# advertises. Re-discovers, normalizes append-only (every stream + field
+# selected), then PATCHes /connections/update — but ONLY when the discovered
+# catalog actually drifts from what the connection already has. State
+# (per-stream cursors) survives the update because Airbyte keys state on
+# (connectionId, streamName), not on catalog shape.
+#
+# Called on EVERY reconcile pass for an existing connection, not just on
+# republish: a republish that refreshed against a stale state (or any other
+# drift) would otherwise never self-heal, since the next pass sees the
+# definition already at target (noop) and would skip the refresh. Decoupling
+# refresh from republish closes that gap — the connection re-converges within
+# one schedule interval regardless of what left it stale.
+#
+# `force_fresh` (default "false") controls the discover cache:
+#   - republish (image changed): pass "true". Airbyte's discover cache is
+#     keyed by source config — unchanged on an image-only bump — so a cached
+#     discover would return the OLD schema and new fields would never land.
+#   - noop pass (image unchanged): pass "false". The cached catalog already
+#     reflects the current image (a prior republish busted the cache), so the
+#     cheap cached discover is authoritative and avoids spinning the connector
+#     pod on every 15-minute tick.
+# The drift gate means a cached "same" result is a no-op either way.
+#
+# Returns 0 on success / noop (dry-run / empty connection_id / no drift),
+# 1 on discover, drift-check, or update failure.
 # ---------------------------------------------------------------------------
 reconcile_refresh_catalog() {
-  local connector_name="$1" source_id="$2" connection_id="$3"
+  local connector_name="$1" source_id="$2" connection_id="$3" force_fresh="${4:-false}"
   if [[ -z "${connection_id}" ]]; then
     # Bootstrap path: caller will have already created the connection with
     # a freshly-discovered catalog. Nothing to refresh.
     return 0
   fi
-  if [[ "${RECONCILE_DRY_RUN:-0}" -eq 1 ]]; then  # RULE-DEFAULTS-OK: feature flag — OFF when caller doesn't opt in
-    reconcile__log CHANGE "${connector_name}" \
-      "would refresh sync_catalog on connection ${connection_id} (re-discover; new streams/fields auto-enabled)"
-    return 0
-  fi
-  local discover_json sync_catalog
-  # disable_cache=true: this refresh runs on republish (definition/image
-  # changed). Airbyte's discover cache is keyed by source config — unchanged
-  # on an image-only bump — so a cached discover would return the OLD schema
-  # and new fields would never reach the sync_catalog. Force a fresh discover.
-  if ! discover_json="$(ab_discover_schema "${source_id}" true)"; then
+  local discover_json sync_catalog current_conn current_catalog drift
+  if ! discover_json="$(ab_discover_schema "${source_id}" "${force_fresh}")"; then
     reconcile__log ERROR "${connector_name}" \
       "ab_discover_schema failed during catalog refresh for source ${source_id}"
     return 1
@@ -711,13 +720,38 @@ reconcile_refresh_catalog() {
       "normalize_catalog_to_append failed during catalog refresh for source ${source_id}"
     return 1
   fi
+  # Drift gate: compare the discovered+normalized catalog against the
+  # connection's current one and only PATCH when they differ. Keeps the
+  # every-pass refresh free of write-churn when nothing changed.
+  if ! current_conn="$(ab_get_connection "${connection_id}")"; then
+    reconcile__log ERROR "${connector_name}" \
+      "ab_get_connection failed during catalog refresh for connection ${connection_id}"
+    return 1
+  fi
+  current_catalog="$(printf '%s' "${current_conn}" \
+    | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin).get("syncCatalog",{})))')"
+  if ! drift="$(printf '%s' "${sync_catalog}" \
+        | CURRENT_SYNC_CATALOG="${current_catalog}" \
+          python3 "${_RECONCILE_PY_DIR}/catalog_drift.py")"; then
+    reconcile__log ERROR "${connector_name}" \
+      "catalog_drift check failed for connection ${connection_id}"
+    return 1
+  fi
+  if [[ "${drift}" != "drift" ]]; then
+    return 0  # catalog already in sync — nothing to do
+  fi
+  if [[ "${RECONCILE_DRY_RUN:-0}" -eq 1 ]]; then  # RULE-DEFAULTS-OK: feature flag — OFF when caller doesn't opt in
+    reconcile__log CHANGE "${connector_name}" \
+      "would refresh sync_catalog on connection ${connection_id} (catalog drift detected; new streams/fields auto-enabled)"
+    return 0
+  fi
   if ! ab_update_connection_sync_catalog "${connection_id}" "${sync_catalog}" >/dev/null; then
     reconcile__log ERROR "${connector_name}" \
       "ab_update_connection_sync_catalog failed for connection ${connection_id}"
     return 1
   fi
   reconcile__log CHANGE "${connector_name}" \
-    "sync_catalog refreshed on connection ${connection_id} (new streams/fields auto-enabled)"
+    "sync_catalog refreshed on connection ${connection_id} (catalog drift reconciled; new streams/fields auto-enabled)"
   return 0
 }
 
@@ -1073,13 +1107,20 @@ print(json.dumps(d))
       ;;
   esac
 
-  # Per ADR-0015: every version bump that resulted in a republish (any
-  # bump_kind != none) refreshes the connection's sync_catalog so new
-  # streams and fields advertised by the connector land in bronze on the
-  # next sync. Bootstrap path (conn_action == created) already discovered
-  # the catalog as part of ab_create_connection, so skip there.
-  if [[ "${def_action}" == "republish" && "${conn_action}" != "created" ]]; then
-    if ! reconcile_refresh_catalog "${name}" "${src_id}" "${conn_id}"; then
+  # Keep the connection's sync_catalog in step with the source schema so new
+  # streams/fields advertised by the connector land in bronze on the next
+  # sync. Runs on EVERY pass for an existing connection (not just republish):
+  # the refresh is drift-gated (no-op when already in sync) and self-heals a
+  # catalog left stale by a failed/partial earlier refresh, which a
+  # republish-only trigger could never recover (the next pass is a noop).
+  # `force_fresh=true` only on republish — that's when the discover cache is
+  # stale for the new image; noop passes use the cheap cached discover.
+  # Bootstrap path (conn_action == created) already discovered the catalog in
+  # ab_create_connection, so skip there.
+  if [[ "${conn_action}" != "created" && -n "${conn_id}" ]]; then
+    local refresh_fresh="false"
+    [[ "${def_action}" == "republish" ]] && refresh_fresh="true"
+    if ! reconcile_refresh_catalog "${name}" "${src_id}" "${conn_id}" "${refresh_fresh}"; then
       rc=1
     fi
   fi
