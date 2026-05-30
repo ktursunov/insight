@@ -229,9 +229,11 @@ ALLOWED_PROPERTIES_BY_OBJECT: Mapping[str, FrozenSet[str]] = {
         "lifecyclestage", "phone", "type",
     }),
     "deals": frozenset({
-        "amount", "closedate", "dealname", "dealstage", "dealtype",
+        "amount", "amount_in_home_currency", "closedate", "dealname",
+        "dealstage", "dealtype",
         "hs_analytics_source", "hs_deal_stage_probability",
         "hs_manual_forecast_category", "hs_is_closed", "hs_is_closed_won",
+        "hs_acv", "hs_tcv", "hs_arr",
         "hubspot_owner_id", "hs_created_by_user_id", "pipeline",
         "closed_lost_reason", "hs_priority", "description",
     }),
