@@ -657,6 +657,7 @@ mod tests {
             tenant_id: T1,
             generated_at: Utc::now(),
             metrics: vec![],
+            links: vec![],
         };
         cache
             .put(T1, None, None, &payload)

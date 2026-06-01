@@ -109,8 +109,9 @@ async fn insert_tenant_threshold(
 }
 
 /// Look up the catalog `id` for a `metric_key`. Used by tests to pin
-/// assertions on a specific metric without surfacing `metric_key` on the
-/// wire (the catalog response intentionally omits `metric_key`).
+/// assertions on a specific metric: `metric_key` is now surfaced on the wire
+/// per ADR-002, but tests historically pinned by `id` and that contract is
+/// load-bearing — `id` is the stable lookup key consumers MUST use.
 async fn metric_id_for_key(
     db: &DatabaseConnection,
     metric_key: &str,
@@ -294,10 +295,11 @@ async fn tenant_lock_shadows_team_override() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[ignore = "requires live MariaDB 11+; set INTEGRATION_TESTS_MARIADB_URL to enable"]
-async fn response_never_includes_metric_key_field() -> anyhow::Result<()> {
-    // `DoD` #2 wire-shape pin: `metric_key` MUST NOT appear in the response
-    // bytes — verified end-to-end against a live DB so the contract is
-    // tested on the same JSON serializer that ships in production.
+async fn response_includes_metric_key_for_fe_bridge() -> anyhow::Result<()> {
+    // ADR-002: `metric_key` IS on the wire as the transitional FE-bridge
+    // identifier. Every metric in the response must carry a non-empty key
+    // so the FE can align its compile-in `BULLET_DEFS` constants to wire
+    // rows during the catalog-hydration release.
     let Some(db) = connect_or_skip().await else {
         return Ok(());
     };
@@ -306,10 +308,69 @@ async fn response_never_includes_metric_key_field() -> anyhow::Result<()> {
 
     let resolver = ThresholdResolver::new(db.clone());
     let response = resolver.resolve(Uuid::now_v7(), "", "").await?;
-    let body = serde_json::to_string(&response)?;
     assert!(
-        !body.contains("metric_key"),
-        "wire response MUST NOT carry metric_key; got: {body}"
+        !response.metrics.is_empty(),
+        "seed migration must produce at least one enabled metric"
     );
+    for m in &response.metrics {
+        assert!(
+            !m.metric_key.is_empty(),
+            "every metric row must carry a metric_key per ADR-002; id={}",
+            m.id
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires live MariaDB 11+; set INTEGRATION_TESTS_MARIADB_URL to enable"]
+async fn response_includes_link_map_from_metric_query_catalog() -> anyhow::Result<()> {
+    // ADR-003: the `metric_query_catalog` M:N mapping is surfaced on the
+    // top-level `links` field. The seed migration backfills 9 query→prefix
+    // entries; we assert the link map is non-empty and well-formed, and
+    // that every `catalog_metric_ids` UUID corresponds to a real catalog
+    // row in the same response (no phantom references).
+    let Some(db) = connect_or_skip().await else {
+        return Ok(());
+    };
+    reset_catalog(&db).await?;
+    Migrator::up(&db, None).await?;
+
+    let resolver = ThresholdResolver::new(db.clone());
+    let response = resolver.resolve(Uuid::now_v7(), "", "").await?;
+
+    assert!(
+        !response.links.is_empty(),
+        "metric_query_catalog seed expects at least one (query, catalog) link"
+    );
+    let known_ids: std::collections::HashSet<Uuid> =
+        response.metrics.iter().map(|m| m.id).collect();
+    for link in &response.links {
+        assert!(
+            !link.catalog_metric_ids.is_empty(),
+            "every link row groups at least one catalog id; query_id={}",
+            link.query_id
+        );
+        // The link map filters on `is_enabled = TRUE`, same as the
+        // catalog walk — every id MUST resolve back to a row in
+        // `response.metrics`. A regression here would surface a disabled
+        // or seed-only catalog row to consumers.
+        for cid in &link.catalog_metric_ids {
+            assert!(
+                known_ids.contains(cid),
+                "link references catalog_id={cid} not present in metrics[]; \
+                 disabled-row leak suspected"
+            );
+        }
+        // The grouping logic sorts catalog ids ascending at the DB layer.
+        // A wire-stable order makes the response byte-stable for caches
+        // and diff tooling.
+        let mut sorted = link.catalog_metric_ids.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted, link.catalog_metric_ids,
+            "catalog_metric_ids must be ascending for byte-stable wire"
+        );
+    }
     Ok(())
 }

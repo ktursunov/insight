@@ -31,7 +31,9 @@ use chrono::Utc;
 use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult, Statement, Value};
 use uuid::Uuid;
 
-use crate::domain::catalog::response::{CatalogResponse, MetricView, ThresholdView};
+use crate::domain::catalog::response::{
+    CatalogResponse, MetricQueryLink, MetricView, ThresholdView,
+};
 
 /// Ordered broad→narrow. The walk halts on the first locked row in this order
 /// (with `bounded_by_lock = true` on the result). Otherwise the most-specific
@@ -106,12 +108,19 @@ impl ThresholdResolver {
         role_slug: &str,
         team_id: &str,
     ) -> Result<CatalogResponse, sea_orm::DbErr> {
+        // Two small round-trips: bulk catalog+threshold fetch, then the
+        // junction-table fetch for `links`. A single combined SELECT would
+        // force a Cartesian product against `metric_query_catalog`; the
+        // separate fetch is O(junction rows) ≈ O(metrics × queries-per-metric),
+        // which is small (≤ ~70 rows in v1 seed) and indexed by both directions.
         let rows = bulk_fetch(&self.db, tenant_id, role_slug, team_id).await?;
         let metrics = walk_all(rows);
+        let links = fetch_links(&self.db).await?;
         Ok(CatalogResponse {
             tenant_id,
             generated_at: Utc::now(),
             metrics,
+            links,
         })
     }
 }
@@ -124,6 +133,7 @@ impl ThresholdResolver {
 struct ResolverRow {
     // Catalog columns (repeat per row — denormalized for one round-trip).
     metric_id: Uuid,
+    metric_key: String,
     label: String,
     sublabel: Option<String>,
     description: Option<String>,
@@ -173,6 +183,7 @@ async fn bulk_fetch(
     let sql = "\
         SELECT \
             c.id                        AS metric_id, \
+            c.metric_key                AS metric_key, \
             c.label                     AS label, \
             c.sublabel                  AS sublabel, \
             c.description               AS description, \
@@ -224,6 +235,57 @@ async fn bulk_fetch(
     ))
     .all(db)
     .await
+}
+
+/// One junction row from `metric_query_catalog`. The two ids identify the
+/// `(metrics.query_ref, metric_catalog.metric_key)` pair the junction
+/// represents — both are BINARY(16) UUIDs in MariaDB.
+#[derive(Debug, Clone, FromQueryResult)]
+struct LinkRow {
+    query_id: Uuid,
+    catalog_id: Uuid,
+}
+
+/// Fetch the full `metric_query_catalog` mapping and roll it up into one
+/// [`MetricQueryLink`] per `metrics.id`. The catalog rows are filtered to
+/// `is_enabled = TRUE` to mirror what the catalog walk surfaces — a disabled
+/// row appearing in `links` would be a phantom reference from the consumer's
+/// point of view.
+///
+/// Time/filter invariance per ADR-003: the mapping is the same for any
+/// `(period, person, org)` tuple, so consumers cache it for the same TTL as
+/// the catalog itself rather than recomputing it per value request.
+async fn fetch_links(db: &DatabaseConnection) -> Result<Vec<MetricQueryLink>, sea_orm::DbErr> {
+    let backend = db.get_database_backend();
+    // Sort at the DB layer so the rollup is deterministic without an
+    // in-process sort. Junction rows are O(metrics × queries-per-metric)
+    // — small enough that the DB-side sort is essentially free.
+    let sql = "\
+        SELECT \
+            j.metrics_id        AS query_id, \
+            j.metric_catalog_id AS catalog_id \
+        FROM metric_query_catalog j \
+        INNER JOIN metric_catalog c ON c.id = j.metric_catalog_id \
+        WHERE c.is_enabled = TRUE \
+        ORDER BY j.metrics_id, j.metric_catalog_id";
+
+    let rows = LinkRow::find_by_statement(Statement::from_sql_and_values(backend, sql, []))
+        .all(db)
+        .await?;
+
+    let mut grouped: Vec<MetricQueryLink> = Vec::new();
+    for r in rows {
+        match grouped.last_mut() {
+            Some(prev) if prev.query_id == r.query_id => {
+                prev.catalog_metric_ids.push(r.catalog_id);
+            }
+            _ => grouped.push(MetricQueryLink {
+                query_id: r.query_id,
+                catalog_metric_ids: vec![r.catalog_id],
+            }),
+        }
+    }
+    Ok(grouped)
 }
 
 /// Group rows by metric and run the per-metric walk. Drops metrics that have
@@ -278,6 +340,7 @@ fn walk_one(rows: &mut [ResolverRow]) -> Option<MetricView> {
     // Pull immutable metric metadata from the first row (same across the bucket).
     let head = rows.first()?;
     let metric_id = head.metric_id;
+    let metric_key = head.metric_key.clone();
     let label = head.label.clone();
     let sublabel = head.sublabel.clone();
     let description = head.description.clone();
@@ -341,6 +404,7 @@ fn walk_one(rows: &mut [ResolverRow]) -> Option<MetricView> {
 
     Some(MetricView {
         id: metric_id,
+        metric_key,
         label,
         sublabel,
         description,
@@ -395,6 +459,7 @@ mod tests {
     fn row(scope: Option<&str>, is_locked: bool, good: f64, warn: f64) -> ResolverRow {
         ResolverRow {
             metric_id: Uuid::nil(),
+            metric_key: "test.metric".to_owned(),
             label: "L".to_owned(),
             sublabel: None,
             description: None,
