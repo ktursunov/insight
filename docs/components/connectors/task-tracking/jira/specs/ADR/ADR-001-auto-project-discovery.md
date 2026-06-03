@@ -113,3 +113,13 @@ Decision is confirmed when:
 - Supersedes the `jira_project_keys` design documented in DESIGN §3.3 and PRD §3.1.
 - Mirrors YouTrack ADR-003 decision; Jira and YouTrack now converge on full-ingestion scope.
 - Implementation PR: `feat/jira-auto-project-discovery`.
+
+## Known Behaviors
+
+### Archived projects
+
+`GET /rest/api/3/project/search` returns **all project types** including archived projects by default (Jira Cloud does not filter by `status=live` unless explicitly requested). In practice archived projects return 0 issues via JQL and contribute negligible API cost. If this becomes a concern a follow-up can add `status=live` to the `jira_project_discovery` parent stream's `request_parameters` — that is a backwards-compatible, non-breaking change.
+
+### Issue pagination (`/rest/api/3/search/jql`)
+
+The connector currently uses an `OffsetIncrement` paginator (`startAt` / `maxResults`) against `/rest/api/3/search/jql`. Atlassian's enhanced-JQL endpoint supports cursor-based pagination via `nextPageToken` (already used by the connector's own `CursorPagination` paginator config). The two mechanisms coexist on this endpoint — offset pagination is functional but will be replaced with `nextPageToken`-based pagination in a follow-up to align with Atlassian's recommended approach for large result sets.
