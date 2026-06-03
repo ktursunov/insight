@@ -836,7 +836,13 @@ streams:
         datetime_format: "%Y-%m-%d"
       end_datetime:
         type: MinMaxDatetime
-        datetime: "{{ now_utc().strftime('%Y-%m-%d %H:%M') }}"
+        # Add 14 h to now_utc() so that the JQL upper bound is never behind the
+        # current moment for users in positive UTC offsets (max UTC+14).
+        # Jira interprets bare datetime literals in the user's local timezone;
+        # sending now_utc() as-is would silently exclude recently-updated issues
+        # for users east of UTC (e.g. UTC+3 creates a 3-hour blind spot at the
+        # tail of every scan window).
+        datetime: "{{ (now_utc() + duration('PT14H')).strftime('%Y-%m-%d %H:%M') }}"
         datetime_format: "%Y-%m-%d %H:%M"
       step: P30D
       lookback_window: PT1H
