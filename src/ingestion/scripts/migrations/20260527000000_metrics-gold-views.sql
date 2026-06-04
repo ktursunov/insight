@@ -307,7 +307,7 @@ ARRAY JOIN [
     ('bugs_fixed',      toFloat64(k.bugs_fixed)),
     ('tasks_closed',    toFloat64(k.tasks_closed)),
     ('prs_merged',      toFloat64(coalesce(k.prs_merged, 0))),
-    ('ai_loc_share',    toFloat64(k.ai_loc_share_pct)),
+    ('ai_loc_share_pct', toFloat64(k.ai_loc_share_pct)),
     ('focus_time_pct',  toFloat64(k.focus_time_pct)),
     ('pr_cycle_time_h', toFloat64(coalesce(k.pr_cycle_time_h, 0))),
     ('ai_sessions',     toFloat64(k.ai_sessions))
