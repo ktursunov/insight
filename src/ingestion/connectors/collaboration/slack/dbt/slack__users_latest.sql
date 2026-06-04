@@ -1,6 +1,9 @@
 -- depends_on: {{ ref('slack__bronze_promoted') }}
 {{ config(
     materialized='table',
+    engine='ReplacingMergeTree',
+    order_by=['unique_key'],
+    settings={'allow_nullable_key': 1},
     schema='staging',
     tags=['slack']
 ) }}

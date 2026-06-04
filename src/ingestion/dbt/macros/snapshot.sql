@@ -29,11 +29,13 @@ WITH source_data AS (
             ''
             {% endif %}
         ) AS _row_hash
-    -- FINAL dedups the RMT bronze source to one row per unique_key (latest
+    -- FINAL dedups the ReplacingMergeTree source to one row per key (latest
     -- version) BEFORE hashing. Without it, transient pre-merge duplicates
     -- (e.g. an erroneous Airbyte full_refresh|append re-appending every row)
     -- are each compared to the snapshot high-water mark and written as spurious
     -- SCD2 history versions — data corruption, not just dupes. See ADR-0001.
+    -- Every source_ref MUST therefore be a ReplacingMergeTree relation (bronze is
+    -- promoted; intermediate models like slack__users_latest are RMT too).
     FROM {{ source_ref }} FINAL
 )
 
