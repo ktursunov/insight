@@ -75,13 +75,17 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
-# gears-rust (crates.io)
+# gears-rust toolkit (crates.io)
+#
+# Still published under the legacy `cf-modkit-*` / `cf-*` names. The
+# gears-rust workspace renamed the local packages to `cf-gears-toolkit-*`
+# but the renamed crates have not been pushed to crates.io yet; flip the
+# `package = "..."` strings here when they appear.
 modkit = { package = "cf-modkit", version = "=0.6.2" }
 modkit-auth = { package = "cf-modkit-auth", version = "=0.6.1" }
 modkit-http = { package = "cf-modkit-http", version = "=0.6.2" }
 modkit-security = { package = "cf-modkit-security", version = "=0.6.2" }
 modkit-macros = { package = "cf-modkit-macros", version = "=0.6.2" }
-modkit-errors = { package = "cf-modkit-errors", version = "=0.6.2" }
 modkit-canonical-errors = { package = "cf-modkit-canonical-errors", version = "=0.7.3", features = ["axum", "sea-orm"] }
 
 # gears-rust SDKs (crates.io)
