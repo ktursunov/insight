@@ -737,7 +737,7 @@ All responses use RFC 9457 Problem Details for errors. All list endpoints suppor
 | modkit-db / modkit-db-macros | Analytics, Connector, Identity, Identity Resolution, Alerts, Transform, Email | MariaDB access via SeaORM |
 | modkit-auth | Analytics, Connector, Identity, Identity Resolution, Alerts, Transform, Audit | OIDC/JWT authentication |
 | modkit-odata / modkit-odata-macros | Analytics API, Audit | Query filtering, sorting, pagination |
-| modkit-errors | Analytics, Connector, Identity, Identity Resolution, Alerts, Transform, Audit | RFC 9457 error responses |
+| modkit-canonical-errors | Analytics, Connector, Identity, Identity Resolution, Alerts, Transform, Audit | RFC 9457 error responses (Problem+JSON via `modkit_canonical_errors::Problem`) |
 | modkit-macros | All services | Domain model macros |
 | modkit-sdk | All services | SDK pattern for inter-module contracts |
 | modkit-security | Analytics, Connector, Identity, Identity Resolution, Alerts, Transform, Audit | Security context |
