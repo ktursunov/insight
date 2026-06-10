@@ -1,9 +1,8 @@
 name: salesforce
-version: "2.0.0"
+version: "2.1.0"
 type: cdk
 schedule: "0 5 * * *"
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016). images.cdk.image is
 # empty until first CI build from .github/workflows/build-images.yml,
 # which patches this field via the bump-descriptors job.
@@ -12,10 +11,8 @@ images:
     name: source-salesforce-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/constructorfabric/source-salesforce-insight:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/source-salesforce-insight:2026.06.10.11.55-376321d"
 dbt_select: "tag:salesforce+"
-
 connection:
   namespace: "bronze_salesforce"
 secret:

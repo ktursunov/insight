@@ -1,10 +1,8 @@
 name: github-copilot
-version: "2.0.0"
+version: "2.1.0"
 type: cdk
-
-schedule: "0 2 * * *"   # daily at 02:00 UTC (data for day D available ~24h after end-of-day D UTC)
+schedule: "0 2 * * *" # daily at 02:00 UTC (data for day D available ~24h after end-of-day D UTC)
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016). images.cdk.image is
 # empty until first CI build from .github/workflows/build-images.yml,
 # which patches this field via the bump-descriptors job.
@@ -13,8 +11,7 @@ images:
     name: source-github-copilot-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/constructorfabric/source-github-copilot-insight:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/source-github-copilot-insight:2026.06.10.11.55-376321d"
 # Silver routing: `copilot__ai_dev_usage` feeds class_ai_dev_usage with
 # tool='copilot' (active). `copilot__ai_org_usage` is deferred until
 # class_ai_org_usage is created — it ships with `enabled=false` and is
@@ -23,6 +20,5 @@ images:
 # silver_targets prohibited per Connector Spec §4.10 — Silver determined
 # by dbt_select tags on the staging models.
 dbt_select: "tag:github-copilot+"
-
 connection:
   namespace: "bronze_github_copilot"

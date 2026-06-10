@@ -1,8 +1,7 @@
 name: jira
-version: "1.1.1"
+version: "1.2.0"
 schedule: "0 3 * * *"
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016). The `images:` block is
 # the sole source of truth: CI scans it via dynamic discovery to know what
 # to build, and reconcile reads images.enrich.image to pass to the
@@ -15,15 +14,13 @@ images:
     name: insight-jira-enrich
     dockerfile: ./enrich/Dockerfile
     context: ./enrich
-    image: "ghcr.io/constructorfabric/insight-jira-enrich:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/insight-jira-enrich:2026.06.10.11.55-376321d"
 # Silver routing (class_task_*) is delivered by the task-tracking Silver layer
 # package, not by this connector. The pipeline runs the jira-rust path:
 # dbt(tag:jira) → tt-enrich-jira-run → dbt(tag:silver,tag:jira+). This
 # selector is the third step — only silver models that union jira staging
 # (class_task_*), not the full silver layer. See DESIGN §1.1 and §3.2.
 dbt_select: "tag:silver,tag:jira+"
-
 connection:
   namespace: bronze_jira
 secret:

@@ -1,9 +1,8 @@
 name: github-v2
-version: "1.0.0"
+version: "1.1.0"
 type: cdk
 schedule: "0 2 * * *"
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016). images.cdk.image is
 # empty until first CI build from .github/workflows/build-images.yml,
 # which patches this field via the bump-descriptors job.
@@ -12,10 +11,8 @@ images:
     name: source-github-v2-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/constructorfabric/source-github-v2-insight:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/source-github-v2-insight:2026.06.10.11.55-376321d"
 dbt_select: "tag:github+"
-
 connection:
   namespace: "bronze_github"
 secret:

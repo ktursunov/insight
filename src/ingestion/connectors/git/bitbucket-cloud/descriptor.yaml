@@ -1,19 +1,16 @@
 name: bitbucket-cloud
-version: "1.0.0"
+version: "1.1.0"
 type: cdk
 schedule: "0 2 * * *"
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016).
 images:
   cdk:
     name: source-bitbucket-cloud-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.06.10.11.55-376321d"
 dbt_select: "tag:bitbucket-cloud+"
-
 connection:
   namespace: "bronze_bitbucket_cloud"
 secret:
