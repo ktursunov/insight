@@ -29,13 +29,20 @@ def _collab_persons(roster: Sequence[Person]) -> list[Person]:
     return [p for p in roster if p.team is not None]
 
 
+# Gold views filter on `data_source = 'insight_<src>'` (e.g.
+# `insight_slack`, `insight_m365`, `insight_zoom`, `insight_gmail`).
+# The TEAM_PROFILES keys stay short (slack/m365/...) for readability;
+# this lookup adds the prefix at row-emit time.
+_DATA_SOURCE_PREFIX = "insight_"
+
+
 def _meeting_sources(team: str) -> list[tuple[str, float]]:
-    """(data_source, weight). Returns empty if the team has none."""
+    """(data_source-as-emitted, weight). Empty if the team has none."""
     out: list[tuple[str, float]] = []
     for src in ("zoom", "m365"):
         w = TEAM_PROFILES[team].weights.get(src, 0)
         if w > 0:
-            out.append((src, w))
+            out.append((_DATA_SOURCE_PREFIX + src, w))
     return out
 
 
@@ -44,7 +51,7 @@ def _chat_sources(team: str) -> list[tuple[str, float]]:
     for src in ("slack", "m365"):
         w = TEAM_PROFILES[team].weights.get(src, 0)
         if w > 0:
-            out.append((src, w))
+            out.append((_DATA_SOURCE_PREFIX + src, w))
     return out
 
 
@@ -53,7 +60,7 @@ def _email_sources(team: str) -> list[tuple[str, float]]:
     for src in ("gmail", "m365"):
         w = TEAM_PROFILES[team].weights.get(src, 0)
         if w > 0:
-            out.append((src, w))
+            out.append((_DATA_SOURCE_PREFIX + src, w))
     return out
 
 
