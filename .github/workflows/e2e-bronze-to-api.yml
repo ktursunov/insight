@@ -16,15 +16,14 @@ on:
   # (clickhouse + mariadb + dbt + pytest) on the merge commit just burns
   # ~30 minutes for an outcome we already proved. workflow_dispatch
   # remains for manual reruns against main.
+  #
+  # Deliberately NO `paths:` filter: this check is meant to be a required
+  # status check on main, and a path-filtered required check never reports
+  # on PRs outside the filter — they hang on "Expected" forever. Running on
+  # every PR keeps the gate uniform; the serial suite costs ~4 min with a
+  # warm cargo cache.
   pull_request:
     branches: [main]
-    paths:
-      - "src/ingestion/**"
-      - "src/backend/services/analytics-api/**"
-      - "src/backend/libs/insight-clickhouse/**"
-      - "src/backend/Cargo.toml"
-      - "src/backend/Cargo.lock"
-      - ".github/workflows/e2e-bronze-to-api.yml"
   workflow_dispatch:
 
 env:
@@ -68,8 +67,14 @@ jobs:
           wait
 
       # ─── Run the suite inside the runner ────────────────────────────────
+      # Serial on purpose: the session rig is not xdist-safe yet (see
+      # conftest.py — per-worker analytics-api spawns race SeaORM migrations
+      # in the shared MariaDB, non-primary workers don't wait for ClickHouse
+      # migrations, and the shared dbt target/ dir is deleted by whichever
+      # worker finishes first). Wall-time cost is negligible: the image and
+      # cargo builds dominate the job.
       - name: Run E2E suite
-        run: ./e2e.sh test -n auto --tb=short -q
+        run: ./e2e.sh test --tb=short -q
 
       # ─── Diagnostics on failure ─────────────────────────────────────────
       - name: Dump compose logs on failure

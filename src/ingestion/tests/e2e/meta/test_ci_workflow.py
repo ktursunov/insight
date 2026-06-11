@@ -32,18 +32,19 @@ def test_yaml_parses(workflow: dict) -> None:
     assert "jobs" in workflow
 
 
-def test_required_paths_in_filter(workflow: dict) -> None:
-    """PR-touch path filter MUST cover ingestion, analytics-api, insight-clickhouse lib."""
+def test_runs_on_every_pr(workflow: dict) -> None:
+    """The suite MUST run on every PR — no `paths:` filter. It is meant to be
+    a required status check on main, and a path-filtered required check never
+    reports on PRs outside the filter, leaving them stuck on "Expected"."""
     # PyYAML coerces `on:` (a YAML truthy key) to the boolean True. Accept either.
     on = workflow.get("on") or workflow.get(True)
     assert on, "workflow has no `on:` triggers"
-    pr_paths = set(on.get("pull_request", {}).get("paths", []))
-    for required in (
-        "src/ingestion/**",
-        "src/backend/services/analytics-api/**",
-        "src/backend/libs/insight-clickhouse/**",
-    ):
-        assert required in pr_paths, f"PR path filter missing {required!r}"
+    pr = on.get("pull_request") or {}
+    assert "paths" not in pr and "paths-ignore" not in pr, (
+        "pull_request must not be path-filtered — as a required check it would "
+        "hang on 'Expected' for PRs outside the filter"
+    )
+    assert pr.get("branches") == ["main"]
 
 
 def test_uses_local_runner_image(workflow: dict) -> None:
@@ -60,11 +61,17 @@ def test_ci_env_set_to_true(workflow: dict) -> None:
     assert env.get("CI") == "true", "workflow must export CI=true to enforce snapshot guard"
 
 
-def test_pytest_runs_with_xdist(workflow: dict) -> None:
-    """The pytest invocation MUST use -n auto so the suite parallelizes."""
+def test_pytest_runs_serial(workflow: dict) -> None:
+    """The pytest invocation MUST NOT use xdist: the session rig is not
+    xdist-safe yet (per-worker analytics-api spawns race SeaORM migrations in
+    the shared MariaDB, non-primary workers don't wait for CH migrations, and
+    the shared dbt target/ dir is deleted by whichever worker finishes first —
+    see conftest.py). Flip this test back once worker isolation lands."""
     job = next(iter(workflow["jobs"].values()))
     test_step = next(s for s in job["steps"] if s.get("name") == "Run E2E suite")
-    assert "-n auto" in test_step["run"]
+    assert "-n " not in test_step["run"] and not test_step["run"].rstrip().endswith("-n"), (
+        "CI must run the e2e suite serially until the rig is xdist-safe"
+    )
 
 
 def test_compose_logs_dumped_on_failure(workflow: dict) -> None:
