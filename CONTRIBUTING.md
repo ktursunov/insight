@@ -290,6 +290,22 @@ Why this is a separate step — production ingestion populates `persons`
 from ClickHouse via `/v1/persons-seed` and Airbyte/dbt. Neither runs in
 compose, so we substitute a one-row direct insert.
 
+### Need a populated demo org?
+
+`./dev-compose-seed.sh` only emits the single VITE_DEV_USER_EMAIL row.
+For a 25-person organisation (CEO + 4 teams × {lead + 5 ICs}) with
+visibility wired through the org chart, run the Python seeder:
+
+```bash
+./dev-compose-seed-sample.sh identity   # MariaDB only
+./dev-compose-seed-sample.sh all        # MariaDB + ClickHouse (Phase 2)
+```
+
+The data contract — emails, UUIDs, per-team profiles, activity caps —
+lives in [/Users/antonz/Sources/cf/SEED_DATA_FORMAT.md](../SEED_DATA_FORMAT.md).
+The script source is `insight/compose/seed/` (see its README for ruff /
+mypy / venv setup).
+
 ## Common tasks
 
 ### Tail logs

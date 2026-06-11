@@ -387,3 +387,39 @@ services:
       - "sh"
       - "-c"
       - "corepack enable && pnpm install --frozen-lockfile && pnpm build"
+
+  # ── Sample-data seeder (profile=seed) ──────────────────────────────────
+  #
+  # See compose/seed/README.md and /Users/antonz/Sources/cf/SEED_DATA_FORMAT.md.
+  # Invoked via ./dev-compose-seed-sample.sh which passes positional args
+  # (identity | silver | all) through to seed.py.
+  seed-sample:
+    profiles: ["seed"]
+    container_name: insight-seed-sample
+    networks: [insight]
+    build:
+      context: compose/seed
+      dockerfile: Dockerfile
+    depends_on:
+      mariadb:    { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      identity:   { condition: service_started }
+    environment:
+      # Identity / persons anchor
+      VITE_DEV_USER_EMAIL: "${VITE_DEV_USER_EMAIL:-}"
+      TENANT_DEFAULT_ID:   "${TENANT_DEFAULT_ID:-00000000-df51-5b42-9538-d2b56b7ee953}"
+      # MariaDB
+      MARIADB_HOST:        mariadb
+      MARIADB_PORT:        "3306"
+      MARIADB_USER:        "${MARIADB_USER:-insight}"
+      MARIADB_PASSWORD:    "${MARIADB_PASSWORD:-insight-local}"
+      # ClickHouse (Phase 2)
+      CLICKHOUSE_HOST:     clickhouse
+      CLICKHOUSE_HTTP_PORT: "8123"
+      CLICKHOUSE_USER:     "${CLICKHOUSE_USER:-insight}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-insight-local}"
+    volumes:
+      # Bind-mount the source so seed.py edits don't need a rebuild.
+      - ./compose/seed:/app:ro
+      # Phase 2 will read these to apply gold view migrations.
+      - ./src/ingestion/scripts/migrations:/migrations:ro
