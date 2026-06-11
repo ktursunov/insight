@@ -754,12 +754,25 @@ jobs:
           set -euo pipefail
           CURRENT="$(yq '.version' charts/insight/Chart.yaml)"
           NEXT="$(echo "$CURRENT" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3+1 }')"
+          # yq v4 emits a `---` document separator between results when given
+          # multiple files (behaviour appeared with a runner yq update,
+          # 2026-06-08): without the filter below, `sort -V | tail -1` picks
+          # the separator and `appVersion: "---"` ships in the published
+          # chart — an invalid `app.kubernetes.io/version` label value that
+          # breaks every install (charts 0.1.48–0.1.55 were affected).
           NEW_APP=$(yq -r '.appVersion' \
             src/backend/services/api-gateway/helm/Chart.yaml \
             src/backend/services/analytics-api/helm/Chart.yaml \
             src/backend/services/identity/helm/Chart.yaml \
             src/frontend/helm/Chart.yaml \
+            | grep -Ev '^(---|null)$' \
             | sort -V | tail -1)
+          # Fail loud unless the result is a build tag (YYYY.MM.DD.HH.MM-sha):
+          # a malformed appVersion must never reach a published chart again.
+          if ! echo "$NEW_APP" | grep -Eq '^[0-9]{4}(\.[0-9]{2}){4}-[0-9a-f]{7}$'; then
+            echo "ERROR: computed umbrella appVersion '$NEW_APP' is not a valid build tag" >&2
+            exit 1
+          fi
           echo "Umbrella version $CURRENT → $NEXT (appVersion → $NEW_APP)"
           yq -i ".version = \"$NEXT\""        charts/insight/Chart.yaml
           yq -i ".appVersion = \"$NEW_APP\""  charts/insight/Chart.yaml

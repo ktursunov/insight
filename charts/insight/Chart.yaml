@@ -23,7 +23,7 @@ type: application
 # appVersion — product version. Matches the image tag of all insight-* images.
 # Release pipeline: git tag v0.1.0 → version=0.1.0, appVersion="0.1.0".
 version: 0.1.56
-appVersion: "---"
+appVersion: "2026.06.11.15.07-672d487"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/constructorfabric/insight
 sources:
