@@ -8,12 +8,12 @@ for the data contract.
 
 ## Run it
 
-The stack must be up first (`./dev-compose-up.sh`). Then:
+The stack must be up first (`./dev-compose.sh up`). Then:
 
 ```bash
-./dev-compose-seed-sample.sh                       # everything
-./dev-compose-seed-sample.sh identity              # just identity
-./dev-compose-seed-sample.sh silver                # just silver (Phase 2)
+./dev-compose.sh seed                       # everything
+./dev-compose.sh seed identity              # just identity
+./dev-compose.sh seed silver                # just silver (Phase 2)
 ```
 
 ## Develop on it

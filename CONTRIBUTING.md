@@ -17,14 +17,14 @@ git clone git@github.com:cyberantonz/insight-front.git   # sibling dir
 cd insight
 
 cp .env.compose.example .env.compose
-./dev-compose-up.sh
+./dev-compose.sh up
 ```
 
 Open `http://localhost:3000`. The whole stack — MariaDB, ClickHouse,
 Redis, Redpanda, API gateway, Analytics API, Identity, and the Vite
 frontend with HMR — is now running.
 
-Bring it down with `./dev-compose-down.sh`.
+Bring it down with `./dev-compose.sh down`.
 
 > **First-run timing.** The cold Rust compile is the slow part — count
 > on ~5–15 minutes depending on your machine (it's downloading the
@@ -67,7 +67,7 @@ the preferred one going forward**.
 
 | Path        | Driver               | Use it when                                          |
 | ----------- | -------------------- | ---------------------------------------------------- |
-| **compose** | `dev-compose-up.sh`  | Day-to-day backend / frontend work. Default.        |
+| **compose** | `dev-compose.sh up`  | Day-to-day backend / frontend work. Default.        |
 | k8s/helm    | `dev-up.sh` (Kind)   | Testing helm charts; ingestion (Airbyte) work;      |
 |             |                      | anything that needs Argo Workflows or a real        |
 |             |                      | cluster shape.                                       |
@@ -114,7 +114,7 @@ if you have conflicts.
 2. Rebuild the affected service:
 
    ```bash
-   ./dev-compose-build.sh api-gateway     # or analytics-api / identity / rust / all
+   ./dev-compose.sh build api-gateway     # or analytics-api / identity / rust / all
    ```
 
 3. The running container picks up the new binary automatically because
@@ -137,7 +137,7 @@ environment variables defined in `docker-compose.yml`; edit those and
 
 - `FRONTEND_MODE=dev` (default): Vite is already watching — HMR delivers
   changes to the browser, no manual step.
-- `FRONTEND_MODE=built`: run `./dev-compose-build.sh frontend` after
+- `FRONTEND_MODE=built`: run `./dev-compose.sh build frontend` after
   edits. nginx picks the new files up automatically.
 - `FRONTEND_MODE=ghcr`: the published image is static — switch modes
   to pick up local changes.
@@ -145,8 +145,8 @@ environment variables defined in `docker-compose.yml`; edit those and
 ### Switching frontend mode without bouncing everything
 
 ```bash
-./dev-compose-down.sh
-FRONTEND_MODE=built ./dev-compose-up.sh --skip-build   # if dist/ is fresh
+./dev-compose.sh down
+FRONTEND_MODE=built ./dev-compose.sh up --skip-build   # if dist/ is fresh
 ```
 
 ---
@@ -174,7 +174,7 @@ Compose-only.
 watchexec actually watches the parent **directory** (`/app`) — modern
 watchexec requires a directory, and `/app` only contains the binary +
 config so there's no false-positive surface. When
-`./dev-compose-build.sh` writes a new binary to the bind-mounted path,
+`./dev-compose.sh build` writes a new binary to the bind-mounted path,
 mtime changes, watchexec fires, the container's process restarts in
 ~1 second.
 
@@ -196,11 +196,11 @@ Three ways to mark a backend service as "pull from ghcr":
    ```
 2. Pass it on the CLI:
    ```bash
-   ./dev-compose-up.sh --from-ghcr=api-gateway,identity
+   ./dev-compose.sh up --from-ghcr=api-gateway,identity
    ```
 3. Invert via `--build-only` — everything not listed comes from ghcr:
    ```bash
-   ./dev-compose-up.sh --build-only=analytics-api
+   ./dev-compose.sh up --build-only=analytics-api
    ```
 
 The script generates `compose/override.generated.yml` (gitignored) that
@@ -219,7 +219,7 @@ published image runs as-is.
 | `built` | nginx + host-built dist  | No — rebuild   | Testing the production build path.       |
 | `ghcr`  | `ghcr.io/...` image      | No              | Backend-only work, save laptop CPU/RAM.  |
 
-In `built` mode, run `./dev-compose-build.sh frontend` to refresh the
+In `built` mode, run `./dev-compose.sh build frontend` to refresh the
 dist before bringing the stack up (or whenever you change source).
 
 ---
@@ -250,7 +250,7 @@ So three things must all be true for a dev call to succeed:
 
 * `VITE_DEV_USER_EMAIL` is set (FE builds the bearer token).
 * A row in `persons` has `value_type='email'` and `value_id` matching
-  that address (run `./dev-compose-seed.sh`).
+  that address (run `./dev-compose.sh seed identity`).
 * The gateway proxies `/api/{prefix}` to the right upstream (see
   `no-auth.yaml`).
 
@@ -258,66 +258,55 @@ If you bypass the FE (curl from the host) you must construct the
 same fake bearer yourself, otherwise identity returns
 `401 caller_unresolved`.
 
-## Dev impersonation seed
+## Dev impersonation + demo dataset
 
 A fresh stack has an empty `identity.persons` table. The frontend
 detects this and shows the "Dev impersonation not configured" hint
-until you wire it up. Two steps:
-
-1. Set `VITE_DEV_USER_EMAIL=you@yourorg.com` in `.env.compose`.
-2. Run the seed:
-
-   ```bash
-   ./dev-compose-seed.sh
-   ```
-
-This inserts one row into `identity.persons` with `value_type='email'`
-and your address as `value_id`, bound to the default tenant
-(`TENANT_DEFAULT_ID`). Idempotent — re-running with the same email
-doesn't duplicate.
-
-3. Restart the frontend so it picks up the new env var:
-
-   ```bash
-   docker compose -f docker-compose.yml --profile front-dev up -d insight-front-dev
-   ```
-
-The hint goes away. To impersonate a different user later, change the
-email in `.env.compose`, re-run the seed (or just point at a row you
-inserted manually), and restart the FE.
-
-Why this is a separate step — production ingestion populates `persons`
-from ClickHouse via `/v1/persons-seed` and Airbyte/dbt. Neither runs in
-compose, so we substitute a one-row direct insert.
-
-### Need a populated demo org + activity?
-
-`./dev-compose-seed.sh` only emits the single VITE_DEV_USER_EMAIL row.
-For a full demo — 25-person organisation (CEO + 4 teams × {lead + 5
-ICs}) with visibility wired through the org chart AND 60 days of
-team-typed ClickHouse activity — run:
+until you wire it up.
 
 ```bash
-./dev-compose-seed-sample.sh identity   # MariaDB persons + org_chart only
-./dev-compose-seed-sample.sh silver     # ClickHouse: schema + views + ~24k rows
-./dev-compose-seed-sample.sh all        # both (default if no arg)
+# 1. Set yourself as the dev lead in the demo roster.
+echo 'VITE_DEV_USER_EMAIL=you@yourorg.com' >> .env.compose
+
+# 2. Populate the demo dataset (idempotent).
+./dev-compose.sh seed             # identity + silver — everything
+# or, more selectively:
+./dev-compose.sh seed identity    # just MariaDB: 25 persons + org chart + account map
+./dev-compose.sh seed silver      # just ClickHouse: schema + gold views + ~24k rows
+
+# 3. Restart the frontend container so it picks up VITE_DEV_USER_EMAIL.
+docker compose -f docker-compose.yml --profile front-dev up -d insight-front-dev
 ```
 
-The silver phase does three things in one shot, all idempotent:
-1. Creates bronze + silver placeholder tables (extracted from the k8s
+After `seed identity` runs, the MariaDB has 25 persons:
+
+* CEO (`email_ceo@company.nonpresent`) — apex of the org tree.
+* Your `VITE_DEV_USER_EMAIL` person — leads the development team.
+* 4 team leads (development = you, sales, HR, support).
+* 20 ICs (5 per team, named `email_<team>_<NN>@company.nonpresent`).
+
+Visibility is wired through the BambooHR org-chart source so the
+gateway's per-caller `/v1/persons/{email}` lookups resolve correctly:
+the dev lead sees their 5 direct reports; the CEO sees the whole tree.
+
+After `seed silver` runs, ClickHouse has:
+
+1. Bronze + silver placeholder tables (extracted from the k8s
    `create-bronze-placeholders.sh` workaround).
-2. Applies every `src/ingestion/scripts/migrations/*.sql` to create the
+2. Every `src/ingestion/scripts/migrations/*.sql` applied to create the
    `insight.*` gold views the analytics-api reads.
-3. Generates ~24k rows across 16 silver tables — `class_git_*` only for
-   devs, `class_crm_*` only for sales, etc. per the
-   [SEED_DATA_FORMAT.md](../SEED_DATA_FORMAT.md) §3 profile table.
+3. ~24k rows across 16 silver tables, profile-typed per team (`class_git_*`
+   only for devs, `class_crm_*` only for sales, etc.) — see
+   [SEED_DATA_FORMAT.md](../SEED_DATA_FORMAT.md) §3.
 
-After it runs, the analytics-api's schema validator flips from
-"80 metrics error: table_not_found" to "80 ok" and the FE dashboards
-have data to show.
+After `seed silver` runs, the analytics-api's schema validator flips
+from "80 metrics error: table_not_found" to "80 ok" and the FE
+dashboards have data to show.
 
-The script source is `insight/compose/seed/` (see its README for ruff /
-mypy / venv setup).
+The data contract lives at the workspace root in
+[SEED_DATA_FORMAT.md](../SEED_DATA_FORMAT.md); the script source is in
+`insight/compose/seed/` (its README explains the ruff / mypy / venv
+setup).
 
 ## Common tasks
 
@@ -340,8 +329,8 @@ docker compose exec clickhouse clickhouse-client --user insight --password insig
 ### Wipe everything and start fresh
 
 ```bash
-./dev-compose-down.sh --volumes
-./dev-compose-up.sh
+./dev-compose.sh down --volumes
+./dev-compose.sh up
 ```
 
 ### Run a one-off Rust build with custom args
@@ -404,13 +393,13 @@ Read `.env.compose.example` end-to-end. The blocks are:
 ## Troubleshooting
 
 **`docker compose up` says a bind-mount path doesn't exist.**
-You probably skipped the build phase. Re-run `./dev-compose-up.sh`
-without `--skip-build`, or run `./dev-compose-build.sh all` first.
+You probably skipped the build phase. Re-run `./dev-compose.sh up`
+without `--skip-build`, or run `./dev-compose.sh build all` first.
 
 **Container exits immediately with "exec format error".**
 The bind-mounted binary is the wrong architecture (e.g. you built
 natively on Mac and the container is Linux). Always build via
-`./dev-compose-build.sh` — never `cargo build` from the host shell.
+`./dev-compose.sh build` — never `cargo build` from the host shell.
 
 **`watchexec: GLIBC_2.39 not found` or `No such file or directory`.**
 The Dockerfile pins the musl static build of watchexec and creates a
@@ -429,7 +418,7 @@ minutes. Subsequent starts are fast. Tail with
 `docker compose logs -f insight-front-dev`.
 
 **Port already in use.**
-Edit the relevant `*_PORT` in `.env.compose` and `./dev-compose-up.sh`
+Edit the relevant `*_PORT` in `.env.compose` and `./dev-compose.sh up`
 again.
 
 **I need Airbyte / Argo Workflows.**
