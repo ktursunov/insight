@@ -27,7 +27,7 @@ If `validate-strict` passed, these are already satisfied automatically — but e
 
 - [ ] No whole-object `$ref` to `#/definitions/<X>` or `#/streams/<N>`. Only leaf-field `$ref` into `#/definitions/linked/<Component>/<field>` is allowed.
 - [ ] Every `AddFields.fields[]` item has `type: AddedFieldDefinition`.
-- [ ] `concurrency_level.default_concurrency` is a literal integer.
+- [ ] `concurrency_level.default_concurrency` is a literal integer **≥ 2** (with 1 worker the concurrent CDK self-deadlocks at ≥ ~10k partitions — futures-limit throttle with no free worker; fingerprint: records counter frozen at exactly 10000, CPU-busy, zero I/O).
 - [ ] `page_size` in `OffsetIncrement` / `CursorPagination` is either a literal integer OR a Jinja template like `"{{ config.get('x_page_size', 100) }}"` (both forms are accepted by the CDK and the Builder UI). Wire declared `*_page_size` config keys via the templated form so operator overrides take effect.
 - [ ] Schema `$schema` is `http://json-schema.org/schema#` (not draft-07).
 - [ ] Schema type arrays are `[type, "null"]`, not `["null", type]`.

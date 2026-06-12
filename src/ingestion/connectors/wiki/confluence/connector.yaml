@@ -657,9 +657,17 @@ streams:
               {{ config['insight_tenant_id'] }}-{{ config['insight_source_id']
               }}-{{ record['id'] }}
 
+# default_concurrency MUST be >= 2. With 1 worker the concurrent CDK
+# self-deadlocks once a sync generates >= ~10k partitions (the CDK futures
+# limit): the only worker thread runs generate_partitions and throttles on
+# "futures limit reached" while the partition-read futures have no other
+# worker to run them. This connector hit it in production via the
+# wiki_page_versions fan-out over wiki_pages — every sync froze at exactly
+# "Records read: 10000" (the futures limit) with CPU-busy spin and zero I/O.
+# See the jira connector for the full diagnosis.
 concurrency_level:
   type: ConcurrencyLevel
-  default_concurrency: 1
+  default_concurrency: 4
 
 spec:
   type: Spec

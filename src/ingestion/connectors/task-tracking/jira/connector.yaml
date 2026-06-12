@@ -8239,6 +8239,15 @@ metadata:
       primaryKeysArePresent: true
       primaryKeysAreUnique: true
 
+# default_concurrency MUST be >= 2. With 1 worker the concurrent CDK
+# self-deadlocks once a sync generates >= ~10k partitions (the futures
+# limit): the only worker thread runs generate_partitions and throttles on
+# "futures limit reached" (partition_enqueuer.py), while the partition-read
+# futures it is waiting on have no other worker to run them. Observed in
+# production on the full-window jira_issue_history fan-out (CPU-busy spin,
+# zero I/O, zero records for hours); confluence froze at exactly
+# "Records read: 10000" from the same deadlock. Verified: same run with
+# concurrency 4 emitted 4208 records in the first 75 seconds.
 concurrency_level:
   type: ConcurrencyLevel
-  default_concurrency: 1
+  default_concurrency: 4
