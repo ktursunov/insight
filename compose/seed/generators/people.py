@@ -10,8 +10,15 @@ Populates:
   chain from a BambooHR-shaped table. The columns used by the
   view are workEmail, displayName, department, jobTitle, supervisorEmail.
 
-Emails are written lowercased to BOTH tables so case-insensitive joins
-elsewhere don't accidentally split one person into two identities.
+`silver.class_people` lowercases its `email` column so case-insensitive
+joins downstream (notably `insight.team_member`, which compares against
+`lower(...)`) match cleanly. `bronze_bamboohr.employees` keeps the
+original casing that a real BambooHR feed would deliver — fine here
+because the seed roster (`profiles.py`) already uses lowercase
+addresses end-to-end, so no identities split in practice. If a future
+roster introduces mixed-case emails, restore `.lower()` on `workEmail`
+and `supervisorEmail` below or fix the downstream view to compare
+case-insensitively.
 
 Both tables use ReplacingMergeTree so re-inserting the same `_version`
 is safe; we TRUNCATE first anyway for cleanliness.
@@ -128,21 +135,17 @@ def seed_bamboohr_employees(
         if sup_email is not None:
             sup = next(q for q in roster if q.email == sup_email)
             sup_name = _display_name(sup)
-        # Lowercase both emails for case-insensitive identity. `silver.
-        # class_people.email` is lowercased too — mismatched casing here
-        # would silently split joins where the analytics-api lower-cases
-        # one side and matches the other verbatim.
         rows.append((
             deterministic_uuid("bamboohr.employee", p.email),
             "Active",
             first or full,
             last or "",
             full,
-            p.email.lower(),
+            p.email,
             _TEAM_DEPARTMENT.get(p.team or "", "Executive"),
             _TEAM_DIVISION.get(p.team or "", "Executive"),
             _job_title(p),
-            (sup_email or "").lower(),
+            (sup_email or ""),
             sup_name,
         ))
     return bulk_insert(client, "bronze_bamboohr", "employees", cols, rows)
