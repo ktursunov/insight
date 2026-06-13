@@ -10,10 +10,10 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use axum::http::{Method, StatusCode};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use toolkit::api::{OpenApiRegistry, OperationBuilder};
 use toolkit::context::GearCtx;
 use toolkit::contracts::{Gear, RestApiCapability};
-use serde::{Deserialize, Serialize};
 
 /// OIDC configuration served to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]

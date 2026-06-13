@@ -57,9 +57,9 @@ use axum::Json;
 use axum::extract::{FromRequest, Request, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use toolkit_canonical_errors::Problem;
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use toolkit_canonical_errors::Problem;
 
 /// GTS type URI for the canonical `invalid_argument` category. Mirrors what
 /// `CanonicalError::gts_type` would emit for the same variant; we build the

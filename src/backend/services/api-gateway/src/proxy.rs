@@ -29,11 +29,11 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use toolkit::api::{OpenApiRegistry, OperationBuilder};
 use toolkit::context::GearCtx;
 use toolkit::contracts::{Gear, RestApiCapability};
 use toolkit_canonical_errors::CanonicalError;
-use serde::Deserialize;
 
 /// Route definition: prefix → upstream.
 #[derive(Debug, Clone, Deserialize)]
@@ -166,17 +166,6 @@ impl RestApiCapability for ProxyModule {
             );
         }
 
-        // TEMPORARILY DISABLED — see https://github.com/cyberfabric/cyberfabric-core/pull/1843
-        //
-        // The wildcard `/{*rest}` registered as `authenticated()` here used to
-        // shield 404s behind a 401 for anonymous callers (so they couldn't
-        // probe path existence). But cyberfabric-core's GatewayRoutePolicy
-        // resolves auth requirements with `is_authenticated` short-circuiting
-        // before the public-route check, so this wildcard masks every
-        // explicitly `.public()` route at a more specific path — including
-        // /v1/auth/config, breaking the SPA's unauthenticated bootstrap.
-        //
-        // PR #1843 flips that precedence (public wins over wildcard
         tracing::warn!(
             "authenticated 404 fallback not yet wired up against cf-gears-api-gateway — \
              unmatched paths return Axum's default 404 without auth checking"
@@ -322,4 +311,3 @@ fn is_hop_by_hop(name: &str) -> bool {
             | "host"
     )
 }
-

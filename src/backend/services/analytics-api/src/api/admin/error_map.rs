@@ -39,9 +39,9 @@
 
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
-use toolkit_canonical_errors::{CanonicalError, Problem};
 use sea_orm::DbErr;
 use serde_json::json;
+use toolkit_canonical_errors::{CanonicalError, Problem};
 use uuid::Uuid;
 
 use crate::api::error::ThresholdAdminError;

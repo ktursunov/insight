@@ -3,11 +3,11 @@
 //! Uses `toolkit-auth` `JwksKeyProvider` for JWT signature validation
 //! and `validate_claims` for standard claim checks.
 
+use secrecy::SecretString;
+use std::sync::Arc;
 use toolkit_auth::traits::KeyProvider;
 use toolkit_auth::{JwksKeyProvider, ValidationConfig, validate_claims};
 use toolkit_security::SecurityContext;
-use secrecy::SecretString;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::config::OidcAuthnPluginConfig;
