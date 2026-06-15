@@ -63,8 +63,12 @@ FROM (
         ORDER BY _airbyte_extracted_at DESC
         LIMIT 1 BY unique_key
     ) a
-    -- explode the audit's events[] JSON array into one row per event
-    ARRAY JOIN JSONExtractArrayRaw(a.events) AS ev
+    -- explode the audit's events[] JSON array into one row per event.
+    -- coalesce(): bronze `events` is Nullable(String); ClickHouse refuses to
+    -- ARRAY JOIN a Nullable(Array(...)) ("Nested type cannot be inside
+    -- Nullable", code 43). Defaulting NULL → '[]' yields an empty array (no
+    -- exploded rows) — the honest behaviour for an audit with no events.
+    ARRAY JOIN JSONExtractArrayRaw(coalesce(a.events, '[]')) AS ev
     -- keep only the event types that map to a metric
     WHERE JSONExtractString(ev, 'type') IN ('Comment', 'Change')
 ) e

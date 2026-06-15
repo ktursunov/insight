@@ -14,8 +14,22 @@ name: zendesk
 # 1.2.0: Ticket Audits stream (support_ticket_events) enabled +
 #   zendesk__support_event activated (explode/classify) → actor-attributed
 #   activity counts (updates/public/private/solved) are now LIVE, not NULL.
-version: "1.2.0"
-type: declarative
+# 1.2.1: support_ticket_events error_handler — IGNORE 404 (deleted tickets still
+#   appear in the incremental export but their audits 404, which would otherwise
+#   fail the whole sync) + RATE_LIMITED 429/503 on the per-ticket audits
+#   substream. PATCH: no schema/stream change.
+# 1.2.2: null-safe metric_set extraction in support_tickets. Zendesk computes
+#   metric_set ASYNC, so on re-syncs the object/sub-objects are present-but-null;
+#   `.get(k, {})` returned None and the chained .get() threw "'None' has no
+#   attribute 'get'", failing every incremental sync. Switched to `(... or {})`.
+#   PATCH: no schema/stream change.
+# `nocode` = declarative-manifest connector (connector.yaml published to the
+# Airbyte builder), as opposed to `cdk` (a pre-built Python image registered
+# from images.cdk.image). MUST be `nocode`/absent for declarative connectors:
+# reconcile only branches on `nocode` vs `cdk` — any other value (e.g.
+# `declarative`) falls through to the cdk image path and fails with no image.
+version: "1.2.2"
+type: nocode
 schedule: "0 5 * * *"       # 05:00 UTC daily
 workflow: sync               # Argo workflow template: ingestion-pipeline
 

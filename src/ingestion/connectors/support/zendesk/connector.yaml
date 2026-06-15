@@ -166,26 +166,30 @@ streams:
             path: [tags]
             value: "{{ record.get('tags', []) | join(',') }}"
           - type: AddedFieldDefinition
-            # solved_at lives in the embedded metric_set object; null when unresolved
+            # solved_at lives in the embedded metric_set object; null when unresolved.
+            # `(... or {})` not `.get(k, {})`: Zendesk computes metric_set
+            # ASYNC, so the key is often present-but-null — .get(k, {}) returns
+            # None then, and the chained .get() throws "'None' has no attribute
+            # 'get'", failing the whole sync.
             path: [solved_at]
-            value: "{{ record.get('metric_set', {}).get('solved_at') or none }}"
+            value: "{{ (record.get('metric_set') or {}).get('solved_at') or none }}"
           - type: AddedFieldDefinition
             # Business-hours first-reply time: metric_set.reply_time_in_minutes.business × 60
             # Returns integer seconds or None (null in Bronze) when no reply yet.
             path: [first_reply_time_seconds]
-            value: "{% set v = (record.get('metric_set') or {}).get('reply_time_in_minutes', {}).get('business') %}{{ (v * 60) | int if v is not none else none }}"
+            value: "{% set v = ((record.get('metric_set') or {}).get('reply_time_in_minutes') or {}).get('business') %}{{ (v * 60) | int if v is not none else none }}"
           - type: AddedFieldDefinition
             # Calendar-hours first-reply time: metric_set.reply_time_in_minutes.calendar × 60
             path: [first_reply_time_calendar_seconds]
-            value: "{% set v = (record.get('metric_set') or {}).get('reply_time_in_minutes', {}).get('calendar') %}{{ (v * 60) | int if v is not none else none }}"
+            value: "{% set v = ((record.get('metric_set') or {}).get('reply_time_in_minutes') or {}).get('calendar') %}{{ (v * 60) | int if v is not none else none }}"
           - type: AddedFieldDefinition
             # Business-hours full-resolution time: metric_set.full_resolution_time_in_minutes.business × 60
             path: [full_resolution_time_seconds]
-            value: "{% set v = (record.get('metric_set') or {}).get('full_resolution_time_in_minutes', {}).get('business') %}{{ (v * 60) | int if v is not none else none }}"
+            value: "{% set v = ((record.get('metric_set') or {}).get('full_resolution_time_in_minutes') or {}).get('business') %}{{ (v * 60) | int if v is not none else none }}"
           - type: AddedFieldDefinition
             # Calendar-hours full-resolution time
             path: [full_resolution_time_calendar_seconds]
-            value: "{% set v = (record.get('metric_set') or {}).get('full_resolution_time_in_minutes', {}).get('calendar') %}{{ (v * 60) | int if v is not none else none }}"
+            value: "{% set v = ((record.get('metric_set') or {}).get('full_resolution_time_in_minutes') or {}).get('calendar') %}{{ (v * 60) | int if v is not none else none }}"
           - type: AddedFieldDefinition
             path: [unique_key]
             value: "{{ config['insight_tenant_id'] }}-{{ config['insight_source_id'] }}-{{ record['id'] }}"
@@ -414,6 +418,28 @@ streams:
         path: "tickets/{{ stream_partition.ticket_id }}/audits.json"
         request_parameters:
           per_page: "100"
+        # Deleted tickets still surface in the incremental ticket export
+        # (Zendesk reports deletions there with status=deleted), but their
+        # audits endpoint returns 404 RecordNotFound. The SubstreamPartitionRouter
+        # fans out to every parent ticket, so without IGNORE-404 a single
+        # deleted ticket fails the entire sync. 429/503 → RATE_LIMITED with
+        # Retry-After backoff: this substream issues one request per ticket, so
+        # it is the most rate-limit-prone stream.
+        error_handler:
+          type: DefaultErrorHandler
+          backoff_strategies:
+            - type: WaitTimeFromHeader
+              header: Retry-After
+          response_filters:
+            - type: HttpResponseFilter
+              action: RATE_LIMITED
+              http_codes:
+                - 429
+                - 503
+            - type: HttpResponseFilter
+              action: IGNORE
+              http_codes:
+                - 404
       record_selector:
         type: RecordSelector
         extractor:
