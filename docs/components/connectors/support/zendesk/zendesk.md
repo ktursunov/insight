@@ -13,18 +13,18 @@ Standalone specification for the Zendesk (Support / Helpdesk) connector.
 - [Overview](#overview)
 - [Phase Scope](#phase-scope)
 - [Bronze Tables](#bronze-tables)
-  - [`support_tickets` — Ticket metadata and current state](#supporttickets-ticket-metadata-and-current-state)
-  - [`support_agents` — Agent directory](#supportagents-agent-directory)
+  - [`support_tickets` — Ticket metadata and current state](#support_tickets--ticket-metadata-and-current-state)
+  - [`support_agents` — Agent directory](#support_agents--agent-directory)
   - [`zendesk_satisfaction_ratings` — CSAT ratings (separate stream)](#zendesk_satisfaction_ratings--csat-ratings-separate-stream)
-  - [`support_collection_runs` — Connector execution log](#supportcollectionruns-connector-execution-log)
-  - [`support_ticket_events` — Ticket Audit log (SHIPPED)](#supportticketevents--ticket-audit-log-shipped)
+  - [`support_collection_runs` — Connector execution log](#support_collection_runs--connector-execution-log)
+  - [`support_ticket_events` — Ticket Audit log (SHIPPED)](#support_ticket_events--ticket-audit-log-shipped)
   - [Phase 2: `zendesk_ticket_ext` — Custom ticket fields](#phase-2-zendesk_ticket_ext--custom-ticket-fields)
 - [Identity Resolution](#identity-resolution)
-- [Silver / Gold Mappings](#silver-gold-mappings)
+- [Silver / Gold Mappings](#silver--gold-mappings)
 - [Resolved Questions](#resolved-questions)
 - [Open Questions](#open-questions)
-  - [OQ-ZD-4: `support_ticket_events` incremental audit collection strategy (Phase 2)](#oq-zd-4-supportticketevents-incremental-audit-collection-strategy-phase-2)
-  - [OQ-ZD-5: Business-hours-only satisfaction_score on support_tickets (Phase 2)](#oq-zd-5-business-hours-only-satisfaction_score-on-supporttickets-phase-2)
+  - [OQ-ZD-4: `support_ticket_events` incremental audit collection strategy (Phase 2)](#oq-zd-4-support_ticket_events-incremental-audit-collection-strategy-phase-2)
+  - [OQ-ZD-5: Business-hours-only satisfaction_score on support_tickets (Phase 2)](#oq-zd-5-business-hours-only-satisfaction_score-on-support_tickets-phase-2)
 
 <!-- /toc -->
 
@@ -366,7 +366,7 @@ Fetching audits requires one API call per ticket (`GET /api/v2/tickets/{id}/audi
 
 **Question**: Should the initial collection only fetch audits for tickets updated within the lookback window (e.g. last 90 days), accepting that older tickets have no event history in Bronze? Or should the connector offer a configurable full-history backfill mode (rate-limited, resumable)?
 
-**Current plan**: Collect audits for all tickets returned by the incremental export cursor. On first run, lookback window is configurable (default: 90 days). Full-history backfill is an operator opt-in via `backfill_mode: full` in the connector config.
+**Current plan**: The audit stream fans out over the slim `support_ticket_ids` parent with `incremental_dependency: true`, so each run only (re)fetches audits for tickets whose `updated_at` advanced since the last cursor — bounded by the incremental window plus `lookback_window: P1D`. There is no `backfill_mode` config key; first-run history is governed by the parent stream's `start_date` / cursor, not a separate backfill mode.
 
 ### OQ-ZD-5: Business-hours-only satisfaction_score on support_tickets (Phase 2)
 

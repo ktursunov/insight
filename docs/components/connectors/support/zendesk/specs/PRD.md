@@ -284,7 +284,7 @@ The connector **MUST** extract CSAT ratings from `GET /api/v2/satisfaction_ratin
 
 > **Status (v2.0): DE-SCOPED.** A declarative (nocode) Airbyte manifest cannot write a connector-generated run-log stream. Run monitoring is delegated to the Airbyte platform job stats / sync logs instead. This FR is retained for traceability but is not implemented.
 
-The connector **MUST** write a row to `support_collection_runs` at the start and end of each execution, recording: run ID (UUID), start timestamp, end timestamp, status (`running` / `completed` / `failed`), per-stream record counts, total API call count, error count, and collection settings as JSON.
+Originally specified the connector to emit a `support_collection_runs` row per execution, recording: run ID (UUID), start timestamp, end timestamp, status (`running` / `completed` / `failed`), per-stream record counts, total API call count, error count, and collection settings as JSON. **DE-SCOPED**: a declarative (nocode) manifest cannot emit a connector-generated stream, so run monitoring is delegated to Airbyte platform job stats / sync logs. This paragraph is retained as historical context only and carries no normative requirement.
 
 **Rationale**: Operational visibility into connector health. Enables alerting on failed runs and tracking data completeness over time.
 

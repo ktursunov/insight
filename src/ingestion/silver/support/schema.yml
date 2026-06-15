@@ -9,9 +9,11 @@ models:
 
       Aggregation guidance for Gold:
         • Activity counts (updates, public_comments, private_comments, solved)
-          are actor-attributed and independent — sum freely. They are honest
-          NULL until a vendor's Ticket Audits stream is wired (Zendesk: pending
-          support_ticket_events).
+          are actor-attributed and independent — sum freely. For Zendesk these
+          are live: the support_ticket_events (Ticket Audits) stream is shipped
+          and feeds zendesk__support_event / zendesk__support_activity. They
+          remain honest NULL only for vendors whose Ticket Audits stream is not
+          yet wired.
         • csat_good / csat_total are assignee-attributed QUALITY signals, not
           activity — surface as a ratio (Σgood/Σtotal), never added to counts.
     columns:
