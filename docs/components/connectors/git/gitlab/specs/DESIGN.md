@@ -110,11 +110,30 @@ Label and milestone names are carried inline on the MR record
 ### 3.2 Code streams
 
 #### `commits`
-All-branch coverage via `?all=true` (server-side deduped single pass — no
-per-branch fan-out, no client seen-set). `with_stats=true` returns
-additions/deletions/total inline at no extra request.
+All-branch coverage via **SHA-graph deltas using revision ranges**, never
+`all=true` (which is empirically dirty — it returns keep-around / hidden refs,
+double-counting squashed-away and force-pushed history). The commits API accepts
+a git revision range in `ref_name` (`A..B` = commits reachable from `B` but not
+`A`), with `with_stats=true` (inline per-commit additions/deletions/total) and
+pagination — all verified on a live instance.
 
-Cursor: `committed_date` (`since` filter). Natural key: `project_id` + `id`.
+Per project (skipped when `last_activity_at` is unchanged): enumerate branches
+(reusing the `branches` stream's per-project records), then scan only the graph
+deltas:
+
+- **default branch**: `old_default_head..new_default_head` (first run: full
+  default from `gitlab_start_date`).
+- **each non-default branch ahead of default**: `default_head..branch_head` —
+  returns only the branch-unique (unmerged feature) commits, **no shared-trunk
+  re-paging** (verified: a feature branch returned 8 unique vs 534 full).
+- branch head SHA unchanged since last scan → skip.
+
+This captures in-progress feature work **as it is pushed** (daily, correctly
+authored and dated, with line totals) — independent of any MR — while fetching
+only deltas. Cross-branch / inclusive-boundary overlaps collapse via RMT on
+`unique_key`. `since`/`until` are used **only** to window a range under the
+offset cap, never for correctness (correctness is graph-based, immune to
+old-dated pushes). Natural key: `project_id` + `sha`.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -124,18 +143,32 @@ Cursor: `committed_date` (`since` filter). Natural key: `project_id` + `id`.
 | `author_name`, `author_email` | String | identity key |
 | `authored_date` | DateTime | |
 | `committer_name`, `committer_email` | String | |
-| `committed_date` | DateTime | cursor |
-| `parent_ids` | Array(String) | `is_merge` derivable: `length > 1` |
+| `committed_date` | DateTime | |
+| `parent_count` | Int | `is_merge` derivable: `> 1` (scalar; full parent SHAs not stored in v1) |
 | `stats_additions`, `stats_deletions`, `stats_total` | Int | from `with_stats` |
-| `trailers` | Map | co-author / sign-off parsing downstream |
+
+Downstream reconciliation (dbt): per-person *volume* counts original authored
+commits and **excludes** merge commits (`parent_count > 1`) and squash commits
+(via MR `squash_commit_sha`), so the squashed-away originals (captured here from
+the feature branch) are counted once — not double-counted against the squash
+commit on trunk.
 
 #### `commit_file_changes`
-Per-file change for commits, from `GET /repository/commits/:sha/diff`. GitLab
-returns no per-file counts → connector parses `+`/`-` hunk lines into
-added/removed. Diffs flagged `too_large`/`collapsed` are emitted with counts
-null and a `truncated` flag — never force-expanded.
+Per-file change for **landed (default-branch) commits only**, from `GET
+/repository/commits/:sha/diff`. Independent top-level stream (NOT a CDK substream
+of `commits` — that would cache the unbounded commits parent and balloon the
+requests-cache). It re-derives the small default-branch SHA delta and fetches
+one diff per commit; **merge commits (`parent_count > 1`) are skipped** to avoid
+double-counting the combined merge diff (squash commits are normal single-parent
+landed commits and are diffed).
 
-Cursor: none of its own; driven by newly-seen commits. Natural key:
+GitLab returns no per-file counts → the connector parses hunks: count lines
+starting `+`/`-`, excluding `+++`/`---`/`@@`/`\ No newline`; `too_large` /
+`collapsed` (or beyond GitLab's diff limit) → row with null counts +
+`diff_truncated=true`; binary / rename / mode-only → `0/0`; per-file line budget
+→ null + truncated on overflow.
+
+Cursor: none of its own; driven by the default-branch SHA delta. Natural key:
 `project_id` + `sha` + `new_path`.
 
 | Field | Type | Notes |
@@ -143,13 +176,12 @@ Cursor: none of its own; driven by newly-seen commits. Natural key:
 | `project_id`, `commit_sha` | Int / String | |
 | `old_path`, `new_path` | String | |
 | `new_file`, `deleted_file`, `renamed_file` | Bool | → change_type downstream |
-| `lines_added`, `lines_removed` | Int | parsed from hunks; null if `too_large` |
+| `lines_added`, `lines_removed` | Int | parsed from hunks; null if truncated/binary-unknown |
 | `diff_truncated` | Bool | true when GitLab elided the diff |
 
-> Cost note: all-branch × per-commit diff is the dominant request cost. Which
-> commits to diff (every commit vs MR-result granularity) is an **optimization
-> decided in the optimization phase**, not here. Capture contract: per-file
-> change for landed commits.
+> Feature-branch per-file churn is deferred — per-commit line *totals* (volume)
+> already arrive timely from `commits` `with_stats`; per-file granularity on
+> unmerged work is a later add if file-level daily churn is needed.
 
 ### 3.3 Review / flow streams
 
@@ -269,32 +301,45 @@ cut.
 | Stream | Cursor | Strategy |
 |---|---|---|
 | `projects`, `users`, `branches` | — | full snapshot each run |
-| `commits` | `committed_date` | `since` = last max committed_date |
-| `commit_file_changes` | — | driven by newly-seen commits |
+| `commits` | per-ref head **SHA** | scan graph deltas `old_head..new_head` |
+| `commit_file_changes` | — | driven by the default-branch SHA delta |
 | `merge_requests`, `issues` | `updated_at` | `updated_after` = last max updated_at |
 | MR / issue children | — | re-pulled in full when parent cursor advances |
 
-State is per top-level stream only. Children are stateless — bounded by their
-parent, re-emitted wholesale when the parent changes. This keeps state small
-and removes any need for per-child cursors or seen-sets.
+Most state is per top-level stream only; MR/issue children are stateless
+(bounded by their parent, re-emitted when it changes).
 
-Commit incremental is date-based because commits are immutable (no
-`updated_after`). A commit can be pushed with a `committed_date` older than the
-cursor (rebase, history import, merge of an old branch), so a naive
-`since = last_max` would miss it. Mitigation, baked in:
+**Commits use graph (SHA) cursors, not date cursors** — more correct than dates
+because a rebase/old-dated push changes the head SHA, so the `old_head..new_head`
+range captures it regardless of commit date (the old-dated-push miss dissolves).
+State, per project, head updated only after a range completes (crash mid-range →
+next run re-fetches the same delta; RMT dedups):
 
-- **Trailing overlap**: query `since = last_max − OVERLAP` each run, not
-  `last_max`. Re-emitting commits already in the overlap is idempotent — bronze
-  is append-only and RMT dedups on `unique_key`. This recovers the common case
-  (recently-dated commits pushed slightly late) as normal sync behavior, not a
-  special path.
-- **Long tail**: commits pushed with dates *older* than the overlap (ancient
-  history imports) are recovered by a periodic full-refresh from
-  `gitlab_start_date`. The connector supports full-refresh; cadence is an
-  operational schedule decision, not a per-sync cost.
+```json
+{"projects": {"123": {
+  "default_branch": "main",
+  "default_head_sha": "abc…",
+  "last_project_activity_at": "…",
+  "branches": {"feature/x": {"head_sha": "def…", "merged": false,
+                             "last_seen_at": "…", "deleted_at": null}},
+  "recent_scanned_heads": {"def…": "…"}
+}}}
+```
 
-The exact OVERLAP value is fixed in code (no knob) when the stream is built and
-validated. (Depends on §7 item 1 for the `all=true` traversal question.)
+Scan logic per run: skip projects whose `last_activity_at` is unchanged; per
+branch, unchanged head → skip; new branch → `default_head..branch_head`; changed
+branch → `old_head..new_head`; missing old SHA (force-push) or range error →
+fall back to `default_head..branch_head`; default changed →
+`old_default..new_default`; first run → full default from `gitlab_start_date`
+then `default_head..branch_head` per non-default branch. Deleted branch →
+`deleted_at` + prune after retention; rename = delete + new branch (skip if the
+new head is already in `recent_scanned_heads`). `since`/`until` window a single
+range only when it nears the offset cap (split until a 1-instant window still
+exceeds it → fail loud).
+
+Known gap: a branch pushed **and** deleted between syncs with no MR is not
+recoverable from the branch list (gone before observation). Events API is
+best-effort only (retention + bulk-push omits refs), not a correctness base.
 
 ## 5. Memory & Robustness Model
 
@@ -473,33 +518,52 @@ assembled from the MR record + `merge_request_state_events` +
 Every cycle-time metric becomes a window function over this log; no phase
 timestamps are hardcoded in the connector.
 
-The squash/line-stats problem dissolves without per-original-commit stat
-fetches: landed per-file churn comes from `commit_file_changes` (a squash
-commit's own diff is the MR's net change); MR size from `changes_count` + its
-landed commit stats; person volume from `commits` stats. Squashed-away
-per-original-commit line counts are intentionally not collected — no objective
-in §2 requires them.
+**Squash and per-original-commit line stats (v1 scope, honest limitation).**
+v1 does **not** fetch per-original-commit line stats for squash-merged work, but
+this is a deliberate trade-off, not a no-op:
 
-## 7. To Verify Empirically (blocks finalization)
+- Fully served by net data (no per-commit stats needed, often *better*): net
+  file churn / hotspots (`commit_file_changes` — a squash commit's own diff is
+  the MR's net change; per-commit churn would double-count in-MR rewrites/
+  reverts), MR size (`changes_count` + landed stats), MR cycle/coding time,
+  commit *count* per person (`merge_request_commits` identity).
+- **Degraded** without per-commit stats: exact per-person *line* volume and
+  work-week line dating (a squash credits all net lines to the squash commit
+  author at merge time), file ownership / bus-factor by line churn, and
+  original-commit-size distribution. Worst case is **bot/integrator-merged**
+  squash MRs, where all lines collapse onto one identity.
+- Cheap recovery is mostly unavailable: GitLab's default squash message is only
+  `%{title}`, so `Co-authored-by` trailers appear only if the project template
+  opted in; squash author = MR creator and committer = merger (not real
+  attribution). A downstream proportional split (net lines ÷ original-commit
+  authors) is an `estimated` dashboard fallback only, never a compliance signal.
 
-1. **`all=true` ref scope** — confirm it traverses only real branches+tags, not
-   keep-around / hidden MR-diff refs (force-push phantoms would double-count
-   volume). Empirical check: force-push an MR branch on a scratch project, then
-   compare commit counts from `?all=true` against the union of per-branch
-   `ref_name` traversals; phantom SHAs present only in `all=true` confirm
-   keep-around inclusion. If dirty → fallback to per-branch traversal (enumerate
-   via the `branches` stream, fetch commits per `ref_name` with the overlap
-   cursor), or default-branch-only + `merge_request_commits`. Decide before
-   writing the stream.
-2. **`all=true` + `since` + `with_stats` composition** — incremental + free
-   inline stats must hold together.
+Reversible by design: `merge_request_commits` already carries every original
+commit's identity (sha, author, dates), so the refinement is an **additive**
+enrichment — a `merge_request_commit_stats` stream keyed
+`{tenant}:{source}:{project_id}:{mr_iid}:{sha}`, fetching `/commits/:sha` stats
+**only for merged + squashed MRs** (optionally only multi-author), never open
+MRs — added later with no re-architecture if a tenant's metrics require it.
+
+## 7. Empirical Verification
+
+Resolved by live-instance spikes:
+
+1. **`all=true` is dirty — confirmed, rejected.** A squash-merged MR with a
+   deleted source branch had its squashed-away original commit returned by
+   `?all=true` but absent from the default branch → keep-around inclusion →
+   double-counting. Commits now use revision-range graph deltas instead.
+2. **Revision ranges verified.** `ref_name=<sha>..<sha>&with_stats=true` returns
+   full commit fields + inline stats + `Link` pagination; `default..feature`
+   returned 8 branch-unique commits vs 534 full (no trunk re-paging);
+   `old..new` returns exactly the new commits, empty range returns none.
+
+Still open:
+
 3. **Max-allowed-offset on the target instance** (default 50,000) — confirm the
-   value and that time-windowing keeps `commits`/`merge_requests` queries under
-   it on the largest repos.
+   value; windowing splits a range only if it nears the cap.
 4. **Approvals shape on the target edition** (CE vs EE) — confirm degradation
-   path.
-5. **Commit incremental gap** — quantify missed-old-commit risk; size the
-   full-refresh backfill cadence.
+   path (verified instance is EE).
 
 ## 8. Decisions to Ratify (supersede legacy `../gitlab.md`)
 

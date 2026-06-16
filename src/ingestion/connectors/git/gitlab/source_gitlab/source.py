@@ -14,6 +14,7 @@ from airbyte_cdk.sources.streams import Stream
 from source_gitlab.client import GitlabClient
 from source_gitlab.config import GitlabConfig
 from source_gitlab.streams.branches import BranchesStream
+from source_gitlab.streams.commits import CommitsStream
 from source_gitlab.streams.projects import ProjectsStream
 from source_gitlab.streams.users import UsersStream
 
@@ -66,10 +67,12 @@ class SourceGitlab(AbstractSource):
             "source_id": cfg.source_id,
         }
         projects = ProjectsStream(groups=cfg.groups, projects=cfg.projects, **shared)
+        branches = BranchesStream(parent=projects, **shared)
         return [
             projects,
             UsersStream(groups=cfg.groups, projects=cfg.projects, **shared),
-            BranchesStream(parent=projects, **shared),
+            branches,
+            CommitsStream(parent=projects, branches=branches, **shared),
         ]
 
 

@@ -13,9 +13,21 @@ from airbyte_cdk.sources.streams.http import HttpStream
 
 _API_PREFIX = "/api/v4/"
 
+MAX_BODY_CHARS = 16384
+MAX_TITLE_CHARS = 1024
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def trim_text(value: Any, limit: int) -> tuple[str | None, bool]:
+    if value is None:
+        return None, False
+    text = str(value)
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
 
 
 class GitlabAuthError(RuntimeError):
