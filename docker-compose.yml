@@ -359,6 +359,20 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-}
+    volumes:
+      # Patch script — inserts `location /api/ → api-gateway:8080` into
+      # the FE image's nginx template at a known marker, then chains to
+      # the original entrypoint. Avoids maintaining a parallel template
+      # (drift surface): we describe just the diff we need. The
+      # published image has no /api proxy because k8s ingress routes
+      # /api → api-gateway directly; compose has no front-proxy so the
+      # hop has to land locally.
+      - ./compose/front-ghcr-patch-template.sh:/compose/front-ghcr-patch-template.sh:ro
+    entrypoint: ["/bin/sh", "/compose/front-ghcr-patch-template.sh"]
+    # Restate the image's baked CMD — compose's `entrypoint:` override
+    # implicitly clears it, which would leave the patch script chaining
+    # to `/docker-entrypoint.sh` with no args, exiting silently.
+    command: ["nginx", "-g", "daemon off;"]
     ports:
       - "${FRONTEND_PORT:-3000}:80"
 
