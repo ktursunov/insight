@@ -254,33 +254,47 @@ EOF
   # ── Frontend ────────────────────────────────────────────────────────
   echo "--- Frontend ---" >&2
   local fe_mode fe_path default_fe_path="../insight-front"
-  echo "  Source mode runs Vite against your insight-front checkout (HMR)." >&2
-  echo "  Leave the path blank to use the pre-built ghcr image instead." >&2
-  fe_path=$(ask "  insight-front source path" "$default_fe_path")
-  if [[ -z "$fe_path" ]]; then
-    fe_mode="ghcr"
-    fe_path="$default_fe_path"
-  elif [[ -d "$fe_path" ]]; then
-    fe_mode="dev"
-  else
-    echo "  Path '$fe_path' does not exist." >&2
-    if ask_yes_no "  Clone insight-front there?" "y"; then
-      if ! command -v git >/dev/null 2>&1; then
-        echo "  WARN: git not installed; falling back to ghcr image." >&2
+  echo "  How should the frontend run?" >&2
+  echo "    1) ghcr   — pull the pre-built image (no source needed)" >&2
+  echo "    2) local  — Vite + HMR against an existing insight-front checkout" >&2
+  echo "    3) clone  — git clone insight-front, then run Vite + HMR" >&2
+  local fe_choice
+  while true; do
+    fe_choice=$(ask "  Choice" "1")
+    case "$fe_choice" in
+      1|ghcr)
         fe_mode="ghcr"
         fe_path="$default_fe_path"
-      elif git clone https://github.com/constructorfabric/insight-front.git "$fe_path" >&2; then
+        break ;;
+      2|local|dev)
         fe_mode="dev"
-      else
-        echo "  WARN: clone failed; falling back to ghcr image." >&2
-        fe_mode="ghcr"
-        fe_path="$default_fe_path"
-      fi
-    else
-      fe_mode="ghcr"
-      fe_path="$default_fe_path"
-    fi
-  fi
+        fe_path=$(ask "  Path to insight-front checkout" "$default_fe_path")
+        if [[ -z "$fe_path" || ! -d "$fe_path" ]]; then
+          echo "  ERROR: '$fe_path' does not exist. Pick option 3 to clone." >&2
+          return 1
+        fi
+        break ;;
+      3|clone)
+        if ! command -v git >/dev/null 2>&1; then
+          echo "  ERROR: git is not installed; pick 1 or 2." >&2
+          continue
+        fi
+        fe_path=$(ask "  Clone insight-front into" "$default_fe_path")
+        if [[ -e "$fe_path" ]]; then
+          echo "  ERROR: '$fe_path' already exists; refusing to clone over it." >&2
+          echo "         Remove it first, or pick 2 to reuse the existing checkout." >&2
+          return 1
+        fi
+        if ! git clone https://github.com/constructorfabric/insight-front.git "$fe_path" >&2; then
+          echo "  ERROR: clone failed." >&2
+          return 1
+        fi
+        fe_mode="dev"
+        break ;;
+      *)
+        echo "  Please answer 1, 2, or 3." >&2 ;;
+    esac
+  done
   echo "" >&2
 
   # ── Seeding decision for external DBs ───────────────────────────────
@@ -446,12 +460,18 @@ cmd_up() {
       local svc
       for svc in $all_backend; do
         if contains "$ghcr_list" "$svc"; then
+          # Ghcr images are amd64-only for now (arm64 builds are
+          # tracked separately). Pin the platform so Apple-silicon
+          # hosts pull the amd64 manifest and run it under Rosetta
+          # instead of erroring with "no matching manifest for
+          # linux/arm64/v8".
           cat <<YML
   ${svc}:
     build: !reset null
     volumes: !override []
     entrypoint: !reset null
     command: !reset null
+    platform: linux/amd64
 YML
         fi
       done

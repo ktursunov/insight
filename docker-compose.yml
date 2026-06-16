@@ -338,6 +338,11 @@ services:
   insight-front-ghcr:
     <<: *restart-policy
     profiles: ["front-ghcr"]
+    # Ghcr images are amd64-only for now (arm64 builds are tracked
+    # separately). Pin the platform so Apple-silicon hosts pull the
+    # amd64 manifest and run it under Rosetta instead of erroring out
+    # with "no matching manifest for linux/arm64/v8".
+    platform: linux/amd64
     image: ${FRONTEND_IMAGE:-ghcr.io/constructorfabric/insight-front:latest}
     container_name: insight-front
     networks:
