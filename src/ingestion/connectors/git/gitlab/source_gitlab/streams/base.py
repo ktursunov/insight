@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, MutableMapping
 from datetime import datetime, timezone
+from functools import cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -28,6 +31,28 @@ def trim_text(value: Any, limit: int) -> tuple[str | None, bool]:
     if len(text) <= limit:
         return text, False
     return text[:limit], True
+
+
+MAX_DIFF_CHARS = 1_000_000
+
+
+def parse_diff_counts(diff_obj: Mapping[str, Any]) -> tuple[int | None, int | None, bool]:
+    if diff_obj.get("too_large") or diff_obj.get("collapsed"):
+        return None, None, True
+    text = diff_obj.get("diff") or ""
+    if not text:
+        return 0, 0, False
+    if len(text) > MAX_DIFF_CHARS:
+        return None, None, True
+    added = removed = 0
+    for line in text.split("\n"):
+        if line.startswith(("+++", "---")):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    return added, removed, False
 
 
 class GitlabAuthError(RuntimeError):
@@ -167,7 +192,15 @@ class GitlabStream(HttpStream, ABC):
         stream_slice: Mapping[str, Any] | None,
         next_page_token: Mapping[str, Any] | None,
     ) -> bool:
-        return next_page_token is None and code in self.skippable_statuses
+        if next_page_token is not None or code not in self.skippable_statuses:
+            return False
+        return not (stream_slice is not None and stream_slice.get("skip_404") is False)
+
+    @cache
+    def get_json_schema(self) -> Mapping[str, Any]:
+        schema_path = Path(__file__).parent / f"{self.name}.schema.json"
+        schema: dict[str, Any] = json.loads(schema_path.read_text())
+        return schema
 
     def _envelope(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None

@@ -337,6 +337,19 @@ new head is already in `recent_scanned_heads`). `since`/`until` window a single
 range only when it nears the offset cap (split until a 1-instant window still
 exceeds it → fail loud).
 
+As implemented: non-default branches use `default_head..branch_head` (the base
+is always the current default head, never stale — a force-pushed branch just
+yields its current unique set). The default-branch range `old_default..new_default`
+is the only one with a stored (possibly stale) base; if its base was
+force-pushed/GC'd the range 404s, and that slice opts **out** of the 404-skip so
+it fails loud rather than advancing the head past a gap — recover with a
+full-refresh (state reset → full default re-traversal). `gitlab_start_date`
+bounds every commit range via `since`. Stored branch heads are pruned each run
+to the current branch set (no unbounded state on branch-farms). Deferred
+(documented optimization): `old_branch_head..new_branch_head` deltas with
+fallback — currently a changed branch re-fetches its full (small) unique set,
+which RMT dedups.
+
 Known gap: a branch pushed **and** deleted between syncs with no MR is not
 recoverable from the branch list (gone before observation). Events API is
 best-effort only (retention + bulk-push omits refs), not a correctness base.

@@ -3,11 +3,6 @@ dev/config*.json
 dev/*.local.json
 dev/state*.json
 dev/catalog.*.json
-
-# Hand-written CDK stream schemas are source (override the repo-wide
-# connectors/**/schemas/ ignore, which targets generated nocode schemas).
-!source_gitlab/schemas/
-!source_gitlab/schemas/**
 *.egg-info/
 __pycache__/
 *.pyc

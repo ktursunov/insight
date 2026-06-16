@@ -19,9 +19,17 @@ class CommitsStream(GitlabSubstream, IncrementalMixin):
     name = "commits"
     cursor_field = "committed_date"
 
-    def __init__(self, *, parent: GitlabStream, branches: GitlabStream, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        parent: GitlabStream,
+        branches: GitlabStream,
+        start_date: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(parent=parent, **kwargs)
         self._branches = branches
+        self._start_date = start_date
         self._state: MutableMapping[str, Any] = {}
 
     @property
@@ -63,6 +71,11 @@ class CommitsStream(GitlabSubstream, IncrementalMixin):
                 if not default_head:
                     continue
                 stored = self._state.get("projects", {}).get(str(project_id), {})
+                if stored.get("branches"):
+                    current = {b.get("name") for b in branch_records}
+                    stored["branches"] = {
+                        k: v for k, v in stored["branches"].items() if k in current
+                    }
                 stored_default = stored.get("default_head")
                 if not stored_default:
                     yield {
@@ -75,6 +88,7 @@ class CommitsStream(GitlabSubstream, IncrementalMixin):
                         "project_id": project_id,
                         "ref": f"{stored_default}..{default_head}",
                         "advance": ("default", default_head),
+                        "skip_404": False,
                     }
                 stored_branches = stored.get("branches", {})
                 for branch in branch_records:
@@ -121,11 +135,14 @@ class CommitsStream(GitlabSubstream, IncrementalMixin):
     def _initial_params(
         self, stream_slice: Mapping[str, Any] | None
     ) -> Mapping[str, Any]:
-        return {
+        params: dict[str, Any] = {
             "ref_name": (stream_slice or {})["ref"],
             "with_stats": "true",
             "per_page": self.page_size,
         }
+        if self._start_date:
+            params["since"] = self._start_date
+        return params
 
     def _record_key(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None

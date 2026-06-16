@@ -15,6 +15,7 @@ from source_gitlab.client import GitlabClient
 from source_gitlab.config import GitlabConfig
 from source_gitlab.streams.branches import BranchesStream
 from source_gitlab.streams.commits import CommitsStream
+from source_gitlab.streams.file_changes import CommitFileChangesStream
 from source_gitlab.streams.projects import ProjectsStream
 from source_gitlab.streams.users import UsersStream
 
@@ -72,7 +73,12 @@ class SourceGitlab(AbstractSource):
             projects,
             UsersStream(groups=cfg.groups, projects=cfg.projects, **shared),
             branches,
-            CommitsStream(parent=projects, branches=branches, **shared),
+            CommitsStream(
+                parent=projects, branches=branches, start_date=cfg.start_date, **shared
+            ),
+            CommitFileChangesStream(
+                parent=projects, branches=branches, start_date=cfg.start_date, **shared
+            ),
         ]
 
 
