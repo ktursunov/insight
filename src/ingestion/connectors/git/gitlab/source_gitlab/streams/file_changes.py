@@ -16,7 +16,6 @@ from source_gitlab.streams.base import (
 
 class _DefaultCommitsEnumerator(GitlabStream):
     name = "_default_commits_internal"
-    skippable_statuses = frozenset({404})
 
     def __init__(self, *, start_date: str | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -60,7 +59,7 @@ class _DefaultCommitsEnumerator(GitlabStream):
 class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
     name = "commit_file_changes"
     cursor_field = "commit_sha"
-    skippable_statuses = frozenset({404})
+    skippable_statuses: frozenset[int] = frozenset()
 
     def __init__(
         self,
@@ -128,26 +127,28 @@ class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
                     enum_slice = {
                         "project_id": project_id,
                         "ref": f"{stored_default}..{default_head}",
-                        "skip_404": False,
                     }
                 else:
                     continue
-                shas = [
-                    c["id"]
-                    for c in self._enum.read_records(
-                        sync_mode=SyncMode.full_refresh,
-                        stream_slice=enum_slice,
-                    )
-                    if isinstance(c, Mapping) and c.get("id") and (c.get("parent_count") or 0) <= 1
-                ]
-                if not shas:
+                # One-item lookahead so only the final SHA carries the state
+                # advance, without materialising the whole SHA list (bounded memory).
+                pending: str | None = None
+                for commit in self._enum.read_records(
+                    sync_mode=SyncMode.full_refresh, stream_slice=enum_slice
+                ):
+                    if (
+                        not isinstance(commit, Mapping)
+                        or not commit.get("id")
+                        or (commit.get("parent_count") or 0) > 1
+                    ):
+                        continue
+                    if pending is not None:
+                        yield {"project_id": project_id, "sha": pending}
+                    pending = commit["id"]
+                if pending is None:
                     self._project_state(project_id)["default_head"] = default_head
                     continue
-                for index, sha in enumerate(shas):
-                    slice_: dict[str, Any] = {"project_id": project_id, "sha": sha}
-                    if index == len(shas) - 1:
-                        slice_["advance"] = default_head
-                    yield slice_
+                yield {"project_id": project_id, "sha": pending, "advance": default_head}
 
     def read_records(
         self,
