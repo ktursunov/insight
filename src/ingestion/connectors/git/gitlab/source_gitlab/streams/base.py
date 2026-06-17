@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, MutableMapping
 from datetime import datetime, timezone
@@ -13,6 +12,9 @@ from urllib.parse import urlsplit
 import requests
 from airbyte_cdk.models import AirbyteMessage, SyncMode
 from airbyte_cdk.sources.streams.http import HttpStream
+
+from source_gitlab.streams import concurrency
+from source_gitlab.streams.errors import GitlabApiError, GitlabAuthError
 
 _API_PREFIX = "/api/v4/"
 
@@ -53,14 +55,6 @@ def parse_diff_counts(diff_obj: Mapping[str, Any]) -> tuple[int | None, int | No
         elif line.startswith("-"):
             removed += 1
     return added, removed, False
-
-
-class GitlabAuthError(RuntimeError):
-    pass
-
-
-class GitlabApiError(RuntimeError):
-    pass
 
 
 class GitlabStream(HttpStream, ABC):
@@ -134,28 +128,12 @@ class GitlabStream(HttpStream, ABC):
     def should_retry(self, response: requests.Response) -> bool:
         if not isinstance(response, requests.Response):
             return True
-        if response.status_code == 429:
-            return True
-        return response.status_code in (500, 502, 503, 504)
+        return concurrency.should_retry(response)
 
     def backoff_time(self, response: requests.Response) -> float | None:
         if not isinstance(response, requests.Response):
             return 60.0
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    return max(float(retry_after), 1.0)
-                except ValueError:
-                    pass
-            reset = response.headers.get("RateLimit-Reset")
-            if reset:
-                try:
-                    return max(float(reset) - time.time(), 1.0)
-                except ValueError:
-                    pass
-            return 60.0
-        return None
+        return concurrency.backoff_time(response)
 
     def parse_response(
         self,

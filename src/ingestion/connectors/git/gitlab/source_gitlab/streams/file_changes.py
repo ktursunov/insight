@@ -1,83 +1,57 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, MutableMapping
-from functools import cache
 from typing import Any
 
 from airbyte_cdk.models import AirbyteMessage, SyncMode
 from airbyte_cdk.sources.streams import IncrementalMixin
 
-from source_gitlab.streams.base import (
-    GitlabStream,
-    GitlabSubstream,
-    parse_diff_counts,
-)
+from source_gitlab.streams import concurrency
+from source_gitlab.streams.base import GitlabStream, GitlabSubstream, parse_diff_counts
+from source_gitlab.streams.concurrency import RequestGate
 from source_gitlab.streams.windowing import CommittedDateWindowing
 
 
-class _DefaultCommitsEnumerator(CommittedDateWindowing, GitlabStream):
-    name = "_default_commits_internal"
+class _DefaultHeadFrontier:
+    """Advance a project's default_head only after all its diff tasks are emitted."""
 
-    def __init__(self, *, start_date: str | None = None, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._start_date = start_date
+    def __init__(self, stream: CommitFileChangesStream) -> None:
+        self._stream = stream
+        self._pending: dict[Any, dict[str, Any]] = {}
 
-    @cache
-    def get_json_schema(self) -> Mapping[str, Any]:
-        return {}
-
-    def stream_slices(self, **kwargs: Any) -> Iterable[Mapping[str, Any] | None]:
-        yield None
-
-    def read_records(
-        self,
-        sync_mode: SyncMode,
-        cursor_field: list[str] | None = None,
-        stream_slice: Mapping[str, Any] | None = None,
-        stream_state: Mapping[str, Any] | None = None,
-    ) -> Iterable[Mapping[str, Any] | AirbyteMessage]:
-        yield from self._windowed_records(
-            sync_mode, cursor_field, stream_slice, stream_state
-        )
-
-    def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str:
-        return f"projects/{(stream_slice or {})['project_id']}/repository/commits"
-
-    def _window_initial(self, stream_slice: Mapping[str, Any] | None) -> dict[str, Any]:
-        return {"since": self._start_date, "until": None}
-
-    def _initial_params(
-        self, stream_slice: Mapping[str, Any] | None
-    ) -> Mapping[str, Any]:
-        params: dict[str, Any] = {
-            "ref_name": (stream_slice or {})["ref"],
-            "per_page": self.page_size,
+    def open(self, project_id: Any, head: str) -> None:
+        self._pending[project_id] = {
+            "head": head,
+            "remaining": 0,
+            "done": False,
+            "advanced": False,
         }
-        since = (stream_slice or {}).get("since")
-        if since:
-            params["since"] = since
-        until = (stream_slice or {}).get("until")
-        if until:
-            params["until"] = until
-        return params
 
-    def _record_key(
-        self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
-    ) -> list[str]:
-        return [str((stream_slice or {})["project_id"]), str(record["id"])]
+    def add_one(self, project_id: Any) -> None:
+        self._pending[project_id]["remaining"] += 1
 
-    def _project(
-        self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
-    ) -> Mapping[str, Any]:
-        return {
-            "id": record.get("id"),
-            "parent_count": len(record.get("parent_ids") or []),
-        }
+    def finish_enum(self, project_id: Any) -> None:
+        self._pending[project_id]["done"] = True
+        self._maybe_advance(project_id)
+
+    def complete_one(self, project_id: Any) -> None:
+        entry = self._pending.get(project_id)
+        if entry is None:
+            return
+        entry["remaining"] -= 1
+        self._maybe_advance(project_id)
+
+    def _maybe_advance(self, project_id: Any) -> None:
+        entry = self._pending[project_id]
+        if entry["done"] and entry["remaining"] == 0 and not entry["advanced"]:
+            self._stream._project_state(project_id)["default_head"] = entry["head"]
+            entry["advanced"] = True
 
 
 class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
     name = "commit_file_changes"
     cursor_field = "commit_sha"
+    state_checkpoint_interval = 1000
     skippable_statuses: frozenset[int] = frozenset()
 
     def __init__(
@@ -85,18 +59,15 @@ class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
         *,
         parent: GitlabStream,
         branches: GitlabStream,
+        gate: RequestGate,
         start_date: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent=parent, **kwargs)
         self._branches = branches
-        self._enum = _DefaultCommitsEnumerator(
-            base_url=self._base_url,
-            token=self._token,
-            tenant_id=self._tenant_id,
-            source_id=self._source_id,
-            start_date=start_date,
-        )
+        self._gate = gate
+        self._start_date = start_date
+        self._strategy = CommittedDateWindowing()
         self._state: MutableMapping[str, Any] = {}
 
     @property
@@ -113,61 +84,7 @@ class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
         return pstate
 
     def stream_slices(self, **kwargs: Any) -> Iterable[Mapping[str, Any] | None]:
-        for parent_slice in self._parent.stream_slices(sync_mode=SyncMode.full_refresh):
-            for project in self._parent.read_records(
-                sync_mode=SyncMode.full_refresh, stream_slice=parent_slice
-            ):
-                if not isinstance(project, Mapping):
-                    continue
-                project_id = project.get("id")
-                default = project.get("default_branch")
-                if project_id is None or not default:
-                    continue
-                branch_records = [
-                    b
-                    for b in self._branches.read_records(
-                        sync_mode=SyncMode.full_refresh,
-                        stream_slice={"parent": project},
-                    )
-                    if isinstance(b, Mapping)
-                ]
-                default_head = next(
-                    (b.get("commit_sha") for b in branch_records if b.get("name") == default),
-                    None,
-                )
-                if not default_head:
-                    continue
-                stored_default = (
-                    self._state.get("projects", {}).get(str(project_id), {}).get("default_head")
-                )
-                if not stored_default:
-                    enum_slice: dict[str, Any] = {"project_id": project_id, "ref": default}
-                elif stored_default != default_head:
-                    enum_slice = {
-                        "project_id": project_id,
-                        "ref": f"{stored_default}..{default_head}",
-                    }
-                else:
-                    continue
-                # One-item lookahead so only the final SHA carries the state
-                # advance, without materialising the whole SHA list (bounded memory).
-                pending: str | None = None
-                for commit in self._enum.read_records(
-                    sync_mode=SyncMode.full_refresh, stream_slice=enum_slice
-                ):
-                    if (
-                        not isinstance(commit, Mapping)
-                        or not commit.get("id")
-                        or (commit.get("parent_count") or 0) > 1
-                    ):
-                        continue
-                    if pending is not None:
-                        yield {"project_id": project_id, "sha": pending}
-                    pending = commit["id"]
-                if pending is None:
-                    self._project_state(project_id)["default_head"] = default_head
-                    continue
-                yield {"project_id": project_id, "sha": pending, "advance": default_head}
+        yield {}
 
     def read_records(
         self,
@@ -176,16 +93,110 @@ class CommitFileChangesStream(GitlabSubstream, IncrementalMixin):
         stream_slice: Mapping[str, Any] | None = None,
         stream_state: Mapping[str, Any] | None = None,
     ) -> Iterable[Mapping[str, Any] | AirbyteMessage]:
-        yield from super().read_records(
-            sync_mode,
-            cursor_field=cursor_field,
-            stream_slice=stream_slice,
-            stream_state=stream_state,
+        frontier = _DefaultHeadFrontier(self)
+        for task, records in concurrency.imap_bounded(
+            self._gate, self._diff_tasks(frontier), self._fetch_diff
+        ):
+            yield from records
+            frontier.complete_one(task["project_id"])
+
+    def _diff_tasks(
+        self, frontier: _DefaultHeadFrontier
+    ) -> Iterable[Mapping[str, Any]]:
+        for project in self._iter_projects():
+            project_id = project.get("id")
+            default = project.get("default_branch")
+            if project_id is None or not default:
+                continue
+            branch_records = [
+                b
+                for b in self._branches.read_records(
+                    sync_mode=SyncMode.full_refresh, stream_slice={"parent": project}
+                )
+                if isinstance(b, Mapping)
+            ]
+            default_head = next(
+                (b.get("commit_sha") for b in branch_records if b.get("name") == default),
+                None,
+            )
+            if not default_head:
+                continue
+            stored = (
+                self._state.get("projects", {}).get(str(project_id), {}).get("default_head")
+            )
+            if not stored:
+                ref = default
+            elif stored != default_head:
+                ref = f"{stored}..{default_head}"
+            else:
+                continue
+            frontier.open(project_id, default_head)
+            for sha in self._iter_shas({"project_id": project_id, "ref": ref}):
+                frontier.add_one(project_id)
+                yield {"project_id": project_id, "sha": sha}
+            frontier.finish_enum(project_id)
+
+    def _iter_projects(self) -> Iterable[Mapping[str, Any]]:
+        for parent_slice in self._parent.stream_slices(sync_mode=SyncMode.full_refresh):
+            for project in self._parent.read_records(
+                sync_mode=SyncMode.full_refresh, stream_slice=parent_slice
+            ):
+                if isinstance(project, Mapping) and project.get("id") is not None:
+                    yield project
+
+    def _iter_shas(self, enum_slice: Mapping[str, Any]) -> Iterable[str]:
+        base = {**enum_slice, "since": self._start_date}
+        for commit in concurrency.walk_window(
+            strategy=self._strategy,
+            base_slice=base,
+            url_base=self.url_base,
+            path_fn=self._commit_path,
+            params_fn=self._commit_params,
+            envelope_fn=self._commit_min,
+            headers=self._headers(),
+            gate=self._gate,
+            skippable=frozenset(),
+        ):
+            if commit.get("id") and (commit.get("parent_count") or 0) <= 1:
+                yield str(commit["id"])
+
+    def _fetch_diff(
+        self, task: Mapping[str, Any]
+    ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+        records = list(
+            concurrency.paginate(
+                self._gate,
+                url_base=self.url_base,
+                path=self._path(stream_slice=task),
+                params=self._initial_params(task),
+                envelope_fn=lambda raw: self._envelope(raw, task),
+                headers=self._headers(),
+                skippable=self.skippable_statuses,
+            )
         )
-        advance = (stream_slice or {}).get("advance")
-        project_id = (stream_slice or {}).get("project_id")
-        if advance and project_id is not None:
-            self._project_state(project_id)["default_head"] = advance
+        return task, records
+
+    def _headers(self) -> Mapping[str, str]:
+        return {"PRIVATE-TOKEN": self._token}
+
+    def _commit_path(self, stream_slice: Mapping[str, Any]) -> str:
+        return f"projects/{stream_slice['project_id']}/repository/commits"
+
+    def _commit_params(self, stream_slice: Mapping[str, Any]) -> Mapping[str, Any]:
+        params: dict[str, Any] = {
+            "ref_name": stream_slice["ref"],
+            "per_page": self.page_size,
+        }
+        if stream_slice.get("since"):
+            params["since"] = stream_slice["since"]
+        if stream_slice.get("until"):
+            params["until"] = stream_slice["until"]
+        return params
+
+    def _commit_min(
+        self, raw: Mapping[str, Any], stream_slice: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        return {"id": raw.get("id"), "parent_count": len(raw.get("parent_ids") or [])}
 
     def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str:
         s = stream_slice or {}

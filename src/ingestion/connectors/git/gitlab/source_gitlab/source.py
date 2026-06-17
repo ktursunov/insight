@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import sys
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ from source_gitlab.client import GitlabClient
 from source_gitlab.config import GitlabConfig
 from source_gitlab.streams.branches import BranchesStream
 from source_gitlab.streams.commits import CommitsStream
+from source_gitlab.streams.concurrency import RequestGate
 from source_gitlab.streams.file_changes import CommitFileChangesStream
 from source_gitlab.streams.issues import IssuesStream
 from source_gitlab.streams.merge_request_approvals import MergeRequestApprovalsStream
@@ -86,44 +88,46 @@ class SourceGitlab(AbstractSource):
             "source_id": cfg.source_id,
         }
         groups, projects_cfg, start = cfg.groups, cfg.projects, cfg.start_date
+        gate = RequestGate(cfg.max_workers)
+        atexit.register(gate.shutdown)
         projects = ProjectsStream(groups=groups, projects=projects_cfg, **shared)
-        branches = BranchesStream(parent=projects, **shared)
+        branches = BranchesStream(parent=projects, gate=gate, **shared)
         return [
             projects,
             UsersStream(groups=groups, projects=projects_cfg, **shared),
             branches,
             CommitsStream(
-                parent=projects, branches=branches, start_date=start, **shared
+                parent=projects, branches=branches, gate=gate, start_date=start, **shared
             ),
             CommitFileChangesStream(
-                parent=projects, branches=branches, start_date=start, **shared
+                parent=projects, branches=branches, gate=gate, start_date=start, **shared
             ),
             MergeRequestsStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             MergeRequestCommitsStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             MergeRequestNotesStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             MergeRequestDiscussionsStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             MergeRequestApprovalsStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             MergeRequestStateEventsStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
             IssuesStream(
-                parent=projects, groups=groups, projects=projects_cfg,
+                parent=projects, gate=gate, groups=groups, projects=projects_cfg,
                 start_date=start, **shared
             ),
         ]

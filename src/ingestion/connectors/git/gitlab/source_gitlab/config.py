@@ -23,6 +23,7 @@ class GitlabConfig:
     groups: tuple[str, ...]
     projects: tuple[str, ...]
     start_date: str | None
+    max_workers: int
 
     @property
     def api_base(self) -> str:
@@ -39,4 +40,5 @@ class GitlabConfig:
             groups=tuple(str(g) for g in (config.get("gitlab_groups") or ())),
             projects=tuple(str(p) for p in (config.get("gitlab_projects") or ())),
             start_date=to_utc_z(parse_iso(str(raw_start))) if raw_start else None,
+            max_workers=max(1, min(32, int(config.get("gitlab_max_workers") or 8))),
         )

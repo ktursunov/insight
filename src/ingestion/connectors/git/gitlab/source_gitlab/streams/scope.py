@@ -7,7 +7,9 @@ from urllib.parse import quote
 from airbyte_cdk.models import AirbyteMessage, SyncMode
 from airbyte_cdk.sources.streams import IncrementalMixin
 
+from source_gitlab.streams import concurrency
 from source_gitlab.streams.base import GitlabStream, ScopedGitlabStream
+from source_gitlab.streams.concurrency import RequestGate
 from source_gitlab.streams.timeutil import parse_iso, subtract_minutes
 from source_gitlab.streams.windowing import UpdatedAtWindowing
 
@@ -87,7 +89,7 @@ def scope_params(
     return params
 
 
-class ScopeUpdatedAtStream(UpdatedAtWindowing, ScopedGitlabStream, IncrementalMixin):
+class ScopeUpdatedAtStream(ScopedGitlabStream, IncrementalMixin):
     cursor_field = "updated_at"
     state_checkpoint_interval = 1000
     resource: str
@@ -96,6 +98,7 @@ class ScopeUpdatedAtStream(UpdatedAtWindowing, ScopedGitlabStream, IncrementalMi
         self,
         *,
         parent: GitlabStream,
+        gate: RequestGate,
         groups: tuple[str, ...],
         projects: tuple[str, ...],
         start_date: str | None = None,
@@ -103,7 +106,9 @@ class ScopeUpdatedAtStream(UpdatedAtWindowing, ScopedGitlabStream, IncrementalMi
     ) -> None:
         super().__init__(groups=groups, projects=projects, **kwargs)
         self._parent = parent
+        self._gate = gate
         self._start_date = start_date
+        self._strategy = UpdatedAtWindowing()
         self._state: MutableMapping[str, Any] = {}
 
     @property
@@ -133,11 +138,18 @@ class ScopeUpdatedAtStream(UpdatedAtWindowing, ScopedGitlabStream, IncrementalMi
         stream_state: Mapping[str, Any] | None = None,
     ) -> Iterable[Mapping[str, Any] | AirbyteMessage]:
         scope_state = self._scope_state(scope_key(stream_slice))
-        for record in self._windowed_records(
-            sync_mode, cursor_field, stream_slice, stream_state
+        for record in concurrency.walk_window(
+            strategy=self._strategy,
+            base_slice=stream_slice or {},
+            url_base=self.url_base,
+            path_fn=lambda applied: self._path(stream_slice=applied),
+            params_fn=self._initial_params,
+            envelope_fn=self._envelope,
+            headers={"PRIVATE-TOKEN": self._token},
+            gate=self._gate,
+            skippable=self.skippable_statuses,
         ):
-            if isinstance(record, Mapping):
-                advance_cursor(scope_state, record.get("updated_at"))
+            advance_cursor(scope_state, record.get("updated_at"))
             yield record
 
     def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str:

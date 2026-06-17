@@ -1,74 +1,17 @@
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from airbyte_cdk.models import SyncMode
-from airbyte_cdk.sources.streams.http import HttpStream
-
+from source_gitlab.streams.errors import UnwindowableWindow
 from source_gitlab.streams.timeutil import parse_iso as _parse
 from source_gitlab.streams.timeutil import to_utc_z as _to_utc_z
 
-
-class WindowTooLarge(RuntimeError):
-    pass
+__all__ = ["CommittedDateWindowing", "UnwindowableWindow", "UpdatedAtWindowing"]
 
 
-class UnwindowableWindow(RuntimeError):
-    pass
-
-
-class TimeWindowedReadMixin:
-    SOFT_PAGE_LIMIT = 490
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._window_page_count = 0
-
-    def next_page_token(self, response: Any) -> Mapping[str, Any] | None:
-        token: Mapping[str, Any] | None = super().next_page_token(response)  # type: ignore[misc]
-        if token is not None:
-            self._window_page_count += 1
-            if self._window_page_count >= self.SOFT_PAGE_LIMIT:
-                raise WindowTooLarge
-        return token
-
-    def parse_response(self, response: Any, **kwargs: Any) -> Iterable[Mapping[str, Any]]:
-        if response.status_code == 400 and "offset" in (response.text or "").lower():
-            raise WindowTooLarge
-        yield from super().parse_response(response, **kwargs)  # type: ignore[misc]
-
-    def _windowed_records(
-        self,
-        sync_mode: SyncMode,
-        cursor_field: list[str] | None,
-        stream_slice: Mapping[str, Any] | None,
-        stream_state: Mapping[str, Any] | None,
-    ) -> Iterable[Any]:
-        windows = deque([self._window_initial(stream_slice)])
-        while windows:
-            window = windows.popleft()
-            self._window_page_count = 0
-            last_value: str | None = None
-            try:
-                for record in HttpStream.read_records(
-                    self,  # type: ignore[arg-type]
-                    sync_mode,
-                    cursor_field=cursor_field,
-                    stream_slice=self._window_apply(stream_slice, window),
-                    stream_state=stream_state,
-                ):
-                    if isinstance(record, Mapping):
-                        value = self._window_value(record)
-                        if value:
-                            last_value = value
-                    yield record
-            except WindowTooLarge:
-                for sub in reversed(self._window_split(window, last_value)):
-                    windows.appendleft(sub)
-
+class WindowStrategy:
     def _window_initial(self, stream_slice: Mapping[str, Any] | None) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -86,7 +29,7 @@ class TimeWindowedReadMixin:
         return None
 
 
-class UpdatedAtWindowing(TimeWindowedReadMixin):
+class UpdatedAtWindowing(WindowStrategy):
     def _window_initial(self, stream_slice: Mapping[str, Any] | None) -> dict[str, Any]:
         return {
             "updated_after": (stream_slice or {}).get("updated_after"),
@@ -127,7 +70,7 @@ class UpdatedAtWindowing(TimeWindowedReadMixin):
         ]
 
 
-class CommittedDateWindowing(TimeWindowedReadMixin):
+class CommittedDateWindowing(WindowStrategy):
     def _window_initial(self, stream_slice: Mapping[str, Any] | None) -> dict[str, Any]:
         return {"since": (stream_slice or {}).get("since"), "until": None}
 
