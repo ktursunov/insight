@@ -8,6 +8,9 @@ from typing import Any
 from airbyte_cdk.models import SyncMode
 from airbyte_cdk.sources.streams.http import HttpStream
 
+from source_gitlab.streams.timeutil import parse_iso as _parse
+from source_gitlab.streams.timeutil import to_utc_z as _to_utc_z
+
 
 class WindowTooLarge(RuntimeError):
     pass
@@ -15,17 +18,6 @@ class WindowTooLarge(RuntimeError):
 
 class UnwindowableWindow(RuntimeError):
     pass
-
-
-def _to_utc_z(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse(timestamp: str) -> datetime:
-    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 class TimeWindowedReadMixin:

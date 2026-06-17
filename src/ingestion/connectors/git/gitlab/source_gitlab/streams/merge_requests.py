@@ -5,19 +5,17 @@ from collections.abc import Mapping
 from typing import Any
 
 from source_gitlab.streams.base import MAX_BODY_CHARS, MAX_TITLE_CHARS, trim_text
-from source_gitlab.streams.project_incremental import ProjectUpdatedAtStream
+from source_gitlab.streams.scope import ScopeUpdatedAtStream
 
 
-class MergeRequestsStream(ProjectUpdatedAtStream):
+class MergeRequestsStream(ScopeUpdatedAtStream):
     name = "merge_requests"
-
-    def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str:
-        return f"projects/{(stream_slice or {})['project_id']}/merge_requests"
+    resource = "merge_requests"
 
     def _record_key(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
     ) -> list[str]:
-        return [str(record.get("project_id")), str(record.get("iid"))]
+        return [str(record["project_id"]), str(record["iid"])]
 
     def _project(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
@@ -56,7 +54,6 @@ class MergeRequestsStream(ProjectUpdatedAtStream):
             "squash_commit_sha": record.get("squash_commit_sha"),
             "squash": record.get("squash"),
             "merge_status": record.get("merge_status"),
-            "changes_count": record.get("changes_count"),
             "user_notes_count": record.get("user_notes_count"),
             "milestone_id": milestone.get("id"),
             "assignee_ids": json.dumps([a.get("id") for a in assignees]),

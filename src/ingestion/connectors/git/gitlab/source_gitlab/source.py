@@ -4,7 +4,7 @@ import json
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 from airbyte_cdk.models import ConnectorSpecification
@@ -29,6 +29,13 @@ from source_gitlab.streams.merge_request_state_events import (
 from source_gitlab.streams.merge_requests import MergeRequestsStream
 from source_gitlab.streams.projects import ProjectsStream
 from source_gitlab.streams.users import UsersStream
+
+
+class _Connection(TypedDict):
+    base_url: str
+    token: str
+    tenant_id: str
+    source_id: str
 
 
 class SourceGitlab(AbstractSource):
@@ -72,31 +79,53 @@ class SourceGitlab(AbstractSource):
 
     def streams(self, config: Mapping[str, Any]) -> list[Stream]:
         cfg = GitlabConfig.parse(config)
-        shared = {
+        shared: _Connection = {
             "base_url": cfg.base_url,
             "token": cfg.token,
             "tenant_id": cfg.tenant_id,
             "source_id": cfg.source_id,
         }
-        projects = ProjectsStream(groups=cfg.groups, projects=cfg.projects, **shared)
+        groups, projects_cfg, start = cfg.groups, cfg.projects, cfg.start_date
+        projects = ProjectsStream(groups=groups, projects=projects_cfg, **shared)
         branches = BranchesStream(parent=projects, **shared)
         return [
             projects,
-            UsersStream(groups=cfg.groups, projects=cfg.projects, **shared),
+            UsersStream(groups=groups, projects=projects_cfg, **shared),
             branches,
             CommitsStream(
-                parent=projects, branches=branches, start_date=cfg.start_date, **shared
+                parent=projects, branches=branches, start_date=start, **shared
             ),
             CommitFileChangesStream(
-                parent=projects, branches=branches, start_date=cfg.start_date, **shared
+                parent=projects, branches=branches, start_date=start, **shared
             ),
-            MergeRequestsStream(parent=projects, **shared),
-            MergeRequestCommitsStream(parent=projects, **shared),
-            MergeRequestNotesStream(parent=projects, **shared),
-            MergeRequestDiscussionsStream(parent=projects, **shared),
-            MergeRequestApprovalsStream(parent=projects, **shared),
-            MergeRequestStateEventsStream(parent=projects, **shared),
-            IssuesStream(parent=projects, **shared),
+            MergeRequestsStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            MergeRequestCommitsStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            MergeRequestNotesStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            MergeRequestDiscussionsStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            MergeRequestApprovalsStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            MergeRequestStateEventsStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
+            IssuesStream(
+                parent=projects, groups=groups, projects=projects_cfg,
+                start_date=start, **shared
+            ),
         ]
 
 

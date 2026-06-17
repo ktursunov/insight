@@ -4,7 +4,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, MutableMapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -22,13 +22,6 @@ MAX_TITLE_CHARS = 1024
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def subtract_minutes(iso_timestamp: str, minutes: int) -> str:
-    moment = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00")) - timedelta(
-        minutes=minutes
-    )
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def trim_text(value: Any, limit: int) -> tuple[str | None, bool]:

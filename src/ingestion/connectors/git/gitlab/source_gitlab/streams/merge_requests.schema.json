@@ -33,7 +33,6 @@
     "squash_commit_sha": { "type": ["string", "null"] },
     "squash": { "type": ["boolean", "null"] },
     "merge_status": { "type": ["string", "null"] },
-    "changes_count": { "type": ["string", "null"] },
     "user_notes_count": { "type": ["integer", "null"] },
     "milestone_id": { "type": ["integer", "null"] },
     "assignee_ids": { "type": ["string", "null"] },

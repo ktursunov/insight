@@ -117,9 +117,8 @@ a git revision range in `ref_name` (`A..B` = commits reachable from `B` but not
 `A`), with `with_stats=true` (inline per-commit additions/deletions/total) and
 pagination — all verified on a live instance.
 
-Per project (skipped when `last_activity_at` is unchanged): enumerate branches
-(reusing the `branches` stream's per-project records), then scan only the graph
-deltas:
+Per project: enumerate branches (reusing the `branches` stream's per-project
+records), then scan only the graph deltas:
 
 - **default branch**: `old_default_head..new_default_head` (first run: full
   default from `gitlab_start_date`).
@@ -186,9 +185,16 @@ Cursor: none of its own; driven by the default-branch SHA delta. Natural key:
 ### 3.3 Review / flow streams
 
 #### `merge_requests`
-Cursor: `updated_at` (`updated_after` + `order_by=updated_at`,
-`sort=asc`). Re-emitting a changed MR re-drives its children. Natural key:
-`project_id` + `iid`.
+Cursor: `updated_at` (`updated_after` + `order_by=updated_at`, `sort=asc`). Two
+enumeration modes (§4): **whole-instance** scope (no groups/projects configured)
+uses the global `/merge_requests?scope=all` endpoint — one stream returning
+every visible MR (archived projects included by default), each carrying
+`project_id`, so dormant projects never appear; **configured** scope resolves to per-project
+`/projects/:id/merge_requests` over the `ProjectsStream`-resolved set (groups
+expand via `include_subgroups`, deduped by project id). The group-level
+`/groups/:id/merge_requests` endpoint is **not** used (its issue counterpart
+silently omits project rows). Re-emitting a changed MR re-drives its children.
+Natural key: `project_id` + `iid`.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -203,7 +209,7 @@ Cursor: `updated_at` (`updated_after` + `order_by=updated_at`,
 | `created_at`, `updated_at`, `merged_at`, `closed_at` | DateTime | phase anchors |
 | `sha`, `merge_commit_sha`, `squash_commit_sha` | String | links MR → landed commit |
 | `squash`, `squash_on_merge` | Bool | squash detection |
-| `merge_status`, `changes_count`, `user_notes_count` | String / Int | |
+| `merge_status`, `user_notes_count` | String / Int | |
 | `labels`, `milestone_id` | Array(String) / Int | |
 
 #### `merge_request_commits`
@@ -275,7 +281,10 @@ Natural key: `project_id` + `event_id`.
 ### 3.4 Planning streams (recommended)
 
 #### `issues`
-Cursor: `updated_at`. Powers issue↔MR linking, ticket refs, issue cycle time.
+Cursor: `updated_at`, same two-mode enumeration as `merge_requests`: whole-instance
+`/issues?scope=all`, else per-project `/projects/:id/issues`
+over the resolved set. `/groups/:id/issues` is **not** used — it omits
+project-level issues. Powers issue↔MR linking, ticket refs, issue cycle time.
 Natural key: `project_id` + `iid`.
 
 | Field | Type | Notes |
@@ -303,25 +312,41 @@ cut.
 | `projects`, `users`, `branches` | — | full snapshot each run |
 | `commits` | per-ref head **SHA** | scan graph deltas `old_head..new_head` |
 | `commit_file_changes` | per-project default head **SHA** | diff the default-branch SHA delta |
-| `merge_requests`, `issues` | per-project `updated_at` | `updated_after = watermark − overlap` (`ProjectUpdatedAtStream`) |
-| MR children (`merge_request_*`) | **own** per-project `updated_at` | each independently re-enumerates changed MRs, then fetches its sub-resource |
+| `merge_requests`, `issues` | per-**scope** `updated_at` (`instance` or `project:<id>`) | `updated_after = max(start_date, watermark − overlap)` (`ScopeUpdatedAtStream`) |
+| MR children (`merge_request_*`) | **own** per-scope `updated_at` | each independently re-enumerates changed MRs (same scope modes), then fetches its sub-resource |
 
-**MR children do NOT share the top-level `merge_requests` cursor.** An incremental
-parent advances its own cursor during its sync, so a child reading through it
-would be starved (0 changed MRs). Instead each child (`MergeRequestChildStream`)
-owns a private MR enumerator and its **own** per-project `updated_at` watermark —
-decoupled, independently resumable. Cost: each child re-lists MRs (the list,
-cheap); the per-MR sub-resource fetches are not duplicated.
+**Scope, not per-project fan-out.** Whole-instance scope (no groups/projects)
+enumerates `merge_requests`/`issues`/the MR enumerator from the global
+`scope=all` list endpoints, state-keyed `instance`. Any configured scope resolves
+to one cursor per **distinct project** (groups expand via the `ProjectsStream`
+parent's `include_subgroups`, deduped by id), state-keyed `project:<id>`, hitting
+`/projects/:id/...`. Both filter on each record's own `updated_at` — the cursor
+field — so dormant projects never appear, with no reliance on
+`project.last_activity_at` (an unreliable activity watermark — it lags real
+activity and does not advance for every event type, so it is never a crawl gate;
+emitted only as a `projects` field). The group-level list endpoints are avoided
+(`/groups/:id/issues` omits project-level issues).
 
-Date cursors (`merge_requests`/`issues`/MR children) use `updated_after =
-watermark − overlap` normalised to UTC `Z` (the `+offset` form must not reach
-the URL), advance to the last server-sorted record's `updated_at`, and rely on
-RMT to collapse the boundary re-emit. `merge_request_approvals` captures the
-current approver **set** (no per-approver timestamp exists on the endpoint);
-approval **timing** is derived downstream from `merge_request_notes` system
-notes. Known TODO (cross-cutting): offset-cap windowing for `commits`,
-`merge_requests`, `issues`, and the MR enumerator (×5) — fails loud at the cap
-today; windowing splits a range/window when it nears the instance max-offset.
+**MR children do NOT share the top-level `merge_requests` cursor.** A child
+reading through an incremental parent would be starved (the parent advances its
+own cursor mid-sync). Each child (`MergeRequestChildStream`) owns a private
+scope-aware MR enumerator and its **own** per-scope `updated_at` watermark —
+decoupled, independently resumable. Cost: each child re-enumerates MRs
+(the cursor-filtered list, cheap); the per-MR sub-resource fetches are not
+duplicated.
+
+Date cursors (`merge_requests`/`issues`/MR children) floor `updated_after` at
+`start_date` on first run (so `start_date` bounds the whole sync, not just
+`commits`), then `watermark − overlap` clamped to ≥ `start_date`, all normalised
+to UTC `Z` (the `+offset` form must not reach the URL). The cursor advances
+**monotonically per record** (max-guarded against the 1 s window-boundary
+re-emit) and the parent streams set `state_checkpoint_interval` so an
+instance-wide scope checkpoints mid-slice rather than all-or-nothing; RMT
+collapses the boundary re-emit on resume. Offset-cap windowing (§5.8) applies to
+these cursor streams unchanged (server-sorted `updated_at` ⇒ rolling-continue).
+`merge_request_approvals` captures the current approver **set** (no per-approver
+timestamp exists on the endpoint); approval **timing** is derived downstream from
+`merge_request_notes` system notes.
 
 **Commits use graph (SHA) cursors, not date cursors** — more correct than dates
 because a rebase/old-dated push changes the head SHA, so the `old_head..new_head`
@@ -340,8 +365,8 @@ next run re-fetches the same delta; RMT dedups):
 }}}
 ```
 
-Scan logic per run: skip projects whose `last_activity_at` is unchanged; per
-branch, unchanged head → skip; new branch → `default_head..branch_head`; changed
+Scan logic per run: per branch, unchanged head → skip; new branch →
+`default_head..branch_head`; changed
 branch → `old_head..new_head`; missing old SHA (force-push) or range error →
 fall back to `default_head..branch_head`; default changed →
 `old_default..new_default`; first run → full default from `gitlab_start_date`
@@ -382,10 +407,11 @@ to build slices, and the CDK response-caches parent HTTP responses — so an
 balloon that cache. `projects` (bounded, ~pages) is a safe parent; for
 `file_changes`, per-commit diffs are driven from within the `commits` traversal
 (or a bounded per-project commit-sha partition), never by making the full
-`commits` stream a cached substream parent. Each child stream also re-enumerates
-`projects`; that redundant enumeration is acceptable while bounded and is
-revisited in the concurrency/optimization phase (a shared project-id partition
-source).
+`commits` stream a cached substream parent. The push-based children (`branches`,
+`commits`, `file_changes`) each re-enumerate the bounded `projects` parent; the
+MR children each re-enumerate the cursor-filtered scope MR list. That redundant
+enumeration is acceptable while bounded and is revisited in the
+concurrency/optimization phase (a shared partition source).
 
 ### 5.2 Pagination
 Offset-based pagination is the universal mechanism and the only one most of our
@@ -564,7 +590,7 @@ a split are harmless (RMT dedups).
   Date-only / tz-naive inputs (`gitlab_start_date` is `YYYY-MM-DD`) normalize to
   UTC before any arithmetic.
 
-**State:** the cursor (per-ref SHA / per-project `updated_at`) advances only
+**State:** the cursor (per-ref SHA / per-scope `updated_at`) advances only
 after **all** windows of the unit complete. No per-window persistence — a crash
 re-runs the unit; append-only + RMT make the re-emit harmless.
 
@@ -609,7 +635,7 @@ this is a deliberate trade-off, not a no-op:
 - Fully served by net data (no per-commit stats needed, often *better*): net
   file churn / hotspots (`commit_file_changes` — a squash commit's own diff is
   the MR's net change; per-commit churn would double-count in-MR rewrites/
-  reverts), MR size (`changes_count` + landed stats), MR cycle/coding time,
+  reverts), MR size (landed `commit_file_changes` stats), MR cycle/coding time,
   commit *count* per person (`merge_request_commits` identity).
 - **Degraded** without per-commit stats: exact per-person *line* volume and
   work-week line dating (a squash credits all net lines to the squash commit
@@ -657,9 +683,10 @@ Still open:
 2. **No connector-computed/enrichment fields** (`duration_seconds`,
    `ai_percentage`, `language_breakdown`, scancode) — transformation lives in
    dbt/enrichment per ADR-0002.
-3. **All-branch commits via `all=true`**, not per-branch iteration — full
-   coverage through GitLab's server-side-deduped single pass, with no in-memory
-   dedup set.
+3. **All-branch commits via SHA-graph revision-range deltas**, not `all=true`
+   (empirically dirty — returns keep-around / hidden refs that double-count
+   squashed-away and force-pushed history) and not full per-branch iteration —
+   scan only `old..new` graph deltas (§3.2), with no in-memory dedup set.
 4. **MR terminology, unprefixed stream names** in `bronze_gitlab` — source-native
    names (`merge_requests`); the namespace supplies the prefix, so table names
    carry no `gitlab_`.
@@ -677,6 +704,23 @@ Still open:
    `namespace.full_path` → `namespace_full_path`) — field mapping per ADR-0002,
    not derivation. All-scalar output also sidesteps `enable_json=false`. Bonus:
    smaller in-flight records (memory) and a deterministic bronze contract.
+8. **Two-mode MR / issue enumeration**, not per-project substreams nor group
+   list endpoints — whole-instance scope uses the global
+   `/merge_requests?scope=all` & `/issues?scope=all` endpoints (one stream,
+   archived projects included by default); any configured scope resolves to per-project
+   `/projects/:id/...` over the `ProjectsStream`-resolved set (groups expanded via
+   `include_subgroups`, deduped by project id). Both filter on each record's own
+   `updated_at`, so dormant projects never appear. The group-level
+   `/groups/:id/{merge_requests,issues}` endpoints are avoided — the issue
+   variant omits project-level issues (silent loss).
+9. **`gitlab_start_date` floors every incremental cursor**, not only `commits` —
+   first-run `updated_after = start_date` for `merge_requests` / `issues` /
+   MR children (clamped on the overlap), so the configured window bounds the
+   entire backfill.
+10. **`last_activity_at` is never a crawl gate** — it lags real activity and does
+    not advance for every event type, so it cannot decide project dormancy
+    without silent loss. It is emitted only as a `projects` field; dormant-project
+    skipping is delivered by the enumeration design (#8), not by activity gating.
 
 ## 9. Verified API Conventions (REST v4)
 
@@ -698,12 +742,19 @@ assumptions.
 - **Pagination headers** — `Link` (`rel=prev/next/first/last`) on offset;
   `Link rel=next` + `X-NEXT-CURSOR`/`X-PREV-CURSOR` on keyset. `x-total`/
   `x-total-pages` are omitted above 10,000 results — never relied upon.
-- **Commit list** — `?all=true` (all refs), `with_stats=true` (inline
-  additions/deletions/total), `since`/`until` (ISO-8601). Per-file detail only
-  via `/repository/commits/:sha/diff` — no per-file counts, parsed from hunks.
-- **MR list** — `updated_after`/`updated_before`, `order_by=updated_at`,
-  `sort=asc`; MR carries `sha`/`merge_commit_sha`/`squash_commit_sha`, `squash`,
-  `changes_count`, `user_notes_count`.
+- **Commit list** — `ref_name=A..B` (git revision-range delta, §3.2; `all=true`
+  rejected as dirty), `with_stats=true` (inline additions/deletions/total),
+  `since`/`until` (ISO-8601, range windowing only). Per-file detail only via
+  `/repository/commits/:sha/diff` — no per-file counts, parsed from hunks.
+- **MR / issue list** — whole-instance via global `/merge_requests` & `/issues`
+  with `scope=all` (archived projects included by default; `non_archived` is not a
+  valid global-endpoint param); configured scope via per-project
+  `/projects/:id/...`. Both with `updated_after`/`updated_before`,
+  `order_by=updated_at`, `sort=asc`. The global record carries `project_id`/`iid`,
+  `sha`/`merge_commit_sha`/`squash_commit_sha`, `squash`, `user_notes_count`
+  (`changes_count` is detail-only — absent from list endpoints). Group-level
+  `/groups/:id/{merge_requests,issues}` are not used (issue variant omits project
+  rows).
 - **Members** — `/groups/:id/members/all` returns inherited members and is
   rate-limited (200/min, 18.6+); enumerate at group level, not per-project, to
   minimize calls.

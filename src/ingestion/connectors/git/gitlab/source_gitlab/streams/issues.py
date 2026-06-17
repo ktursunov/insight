@@ -5,19 +5,17 @@ from collections.abc import Mapping
 from typing import Any
 
 from source_gitlab.streams.base import MAX_BODY_CHARS, MAX_TITLE_CHARS, trim_text
-from source_gitlab.streams.project_incremental import ProjectUpdatedAtStream
+from source_gitlab.streams.scope import ScopeUpdatedAtStream
 
 
-class IssuesStream(ProjectUpdatedAtStream):
+class IssuesStream(ScopeUpdatedAtStream):
     name = "issues"
-
-    def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str:
-        return f"projects/{(stream_slice or {})['project_id']}/issues"
+    resource = "issues"
 
     def _record_key(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
     ) -> list[str]:
-        return [str(record.get("project_id")), str(record.get("iid"))]
+        return [str(record["project_id"]), str(record["iid"])]
 
     def _project(
         self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
