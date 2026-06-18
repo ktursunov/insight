@@ -47,8 +47,12 @@ def parse_diff_counts(diff_obj: Mapping[str, Any]) -> tuple[int | None, int | No
     if len(text) > MAX_DIFF_CHARS:
         return None, None, True
     added = removed = 0
+    in_hunk = False
     for line in text.split("\n"):
-        if line.startswith(("+++", "---")):
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not in_hunk:
             continue
         if line.startswith("+"):
             added += 1
