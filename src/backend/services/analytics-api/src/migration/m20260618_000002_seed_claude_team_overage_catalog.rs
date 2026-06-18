@@ -199,7 +199,7 @@ mod tests {
         );
     }
 
-    /// Unit must be cents (matches cc_cost and the gold view's cents values).
+    /// Unit must be cents (matches `cc_cost` and the gold view's cents values).
     #[test]
     fn unit_is_cents() {
         assert_eq!(SEEDS[0].unit, Some("\u{a2}"), "cc_overage unit must be ¢");

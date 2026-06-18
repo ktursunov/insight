@@ -150,7 +150,7 @@ mod tests {
     /// were removed (honest-NULL) so they are absent here too.
     ///
     /// ⚠️ This list is hand-maintained (mirrors the gold view's branches). A new
-    /// gold branch key MUST be added here AND classified in SUM_KEYS/MAX_KEYS, or
+    /// gold branch key MUST be added here AND classified in `SUM_KEYS/MAX_KEYS`, or
     /// the guard gives false-green (it only checks keys present in this list).
     const BULLET_ROWS_KEYS: &[&str] = &[
         // branch 1 (all dev tools)
@@ -209,7 +209,7 @@ mod tests {
         assert!(!MAX_KEYS.contains(&"codex_lines"));
     }
 
-    /// cc_overage is a per-period spend counter (twin of cc_cost) → sum, never
+    /// `cc_overage` is a per-period spend counter (twin of `cc_cost`) → sum, never
     /// max/avg. Avg would divide a monthly snapshot by active-day count (#1286).
     #[test]
     fn cc_overage_sums_like_cc_cost() {

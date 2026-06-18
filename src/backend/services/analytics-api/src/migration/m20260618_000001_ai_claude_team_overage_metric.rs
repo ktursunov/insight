@@ -4,12 +4,12 @@
 //! Pairs with ingestion migration
 //! `20260618000000_ai-claude-team-overage-gold.sql`, which adds Branch 6
 //! (`metric_key = 'cc_overage'`) to `insight.ai_bullet_rows`, emitting
-//! `overage_cents` from `silver.class_ai_overage` (source='claude_team').
+//! `overage_cents` from `silver.class_ai_overage` (source='`claude_team`').
 //!
 //! Changes to each `query_ref` (Team + IC), extending the m20260609 head:
 //!   1. New `cc_overage_v` in the wide-aggregate — honest-NULL guarded
 //!      (`if(countIf(key) > 0, sumIf(value), NULL)`), like the prs metrics:
-//!      a seat with no overage reading renders ComingSoon, while a seat
+//!      a seat with no overage reading renders `ComingSoon`, while a seat
 //!      within its limit emits a real `0` (the gold view emits 0 only when
 //!      a limit is known).
 //!   2. New `('cc_overage', cc_overage_v)` entry in the ARRAY JOIN unpivot.
@@ -205,7 +205,7 @@ impl MigrationTrait for Migration {
 
     /// Irreversible — roll back the paired CH migration
     /// `20260618000000_ai-claude-team-overage-gold.sql` first (which removes
-    /// the cc_overage branch from the view), then restore the previous
+    /// the `cc_overage` branch from the view), then restore the previous
     /// `query_ref` from `m20260609_000001` manually.
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         Err(DbErr::Custom(
@@ -277,7 +277,7 @@ mod tests {
     }
 
     /// `cc_overage` must be honest-NULL guarded (countIf > 0 … else NULL),
-    /// like the prs metrics: no reading → ComingSoon, never a fake 0.
+    /// like the prs metrics: no reading → `ComingSoon`, never a fake 0.
     #[test]
     fn cc_overage_is_honest_null_guarded() {
         let pp = wide_aggregate_pp();
