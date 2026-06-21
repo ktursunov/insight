@@ -217,11 +217,22 @@ mod tests {
     fn active_authors_is_member_scale_counters_are_not() {
         for r in SEEDS {
             if r.metric_key.ends_with("wiki_active_authors") {
-                assert!(r.is_member_scale, "wiki_active_authors must be member-scale");
+                assert!(
+                    r.is_member_scale,
+                    "wiki_active_authors must be member-scale"
+                );
             } else {
-                assert!(!r.is_member_scale, "{} must not be member-scale", r.metric_key);
+                assert!(
+                    !r.is_member_scale,
+                    "{} must not be member-scale",
+                    r.metric_key
+                );
             }
-            assert!(r.higher_is_better, "{} should be higher-is-better", r.metric_key);
+            assert!(
+                r.higher_is_better,
+                "{} should be higher-is-better",
+                r.metric_key
+            );
         }
     }
 
