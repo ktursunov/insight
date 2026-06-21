@@ -106,12 +106,18 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
         for (hex_id, name, desc, qr) in [
-            (TEAM_BULLET_WIKI_ID, "Team Bullet Wiki",
-             "Wiki (Confluence/Outline) per-person bullets — team view, company-wide range.",
-             team_query()),
-            (IC_BULLET_WIKI_ID, "IC Bullet Wiki",
-             "Wiki (Confluence/Outline) per-person bullets — IC view, per-org-unit range.",
-             ic_query()),
+            (
+                TEAM_BULLET_WIKI_ID,
+                "Team Bullet Wiki",
+                "Wiki (Confluence/Outline) per-person bullets — team view, company-wide range.",
+                team_query(),
+            ),
+            (
+                IC_BULLET_WIKI_ID,
+                "IC Bullet Wiki",
+                "Wiki (Confluence/Outline) per-person bullets — IC view, per-org-unit range.",
+                ic_query(),
+            ),
         ] {
             db.execute_unprepared(&format!(
                 "INSERT INTO metrics (id, insight_tenant_id, name, description, query_ref, is_enabled) \
@@ -179,6 +185,9 @@ mod tests {
             assert!(q.contains("wiki_comments"));
         }
         assert!(team_query().contains("company_median"));
-        assert!(ic_query().contains("team_median") && ic_query().contains("c.org_unit_id = p.org_unit_id"));
+        assert!(
+            ic_query().contains("team_median")
+                && ic_query().contains("c.org_unit_id = p.org_unit_id")
+        );
     }
 }
