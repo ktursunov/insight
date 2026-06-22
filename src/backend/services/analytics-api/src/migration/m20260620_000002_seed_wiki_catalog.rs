@@ -1,13 +1,13 @@
 //! Seed `metric_catalog` + product-default `metric_threshold` rows for the
-//! wiki bullet metric_keys introduced in `m20260620_000001_seed_wiki_metrics`
+//! wiki bullet `metric_keys` introduced in `m20260620_000001_seed_wiki_metrics`
 //! (paired gold view `insight.wiki_bullet_rows`).
 //!
-//! 4 metric_keys, all routed through `wiki_bullet_rows`, source_tags
-//! ["confluence"] (Outline will share the same keys later):
-//!   wiki_pages_created / wiki_edits / wiki_comments — counters (higher better);
-//!   wiki_active_authors — 0/1 member-scale marker.
+//! 4 `metric_keys`, all routed through `wiki_bullet_rows`, `source_tags`
+//! `["confluence"]` (Outline will share the same keys later):
+//!   `wiki_pages_created` / `wiki_edits` / `wiki_comments` — counters (higher better);
+//!   `wiki_active_authors` — 0/1 member-scale marker.
 //!
-//! Mirrors m20260601_000002_seed_claude_team_metrics_catalog (additive
+//! Mirrors `m20260601_000002_seed_claude_team_metrics_catalog` (additive
 //! catalog seed). Thresholds are product-default placeholders; tune per
 //! tenant via the admin CRUD API.
 

@@ -1,21 +1,21 @@
 //! Seed the Team / IC "Bullet Wiki" metric views (wiki class → frontend).
 //!
 //! Pairs with ingestion migration `20260620000000_wiki-bullet-rows.sql`
-//! which creates `insight.wiki_bullet_rows` (long format: person_id,
-//! org_unit_id, metric_date, metric_key, metric_value) from the wiki Silver
+//! which creates `insight.wiki_bullet_rows` (long format: `person_id`,
+//! `org_unit_id`, `metric_date`, `metric_key`, `metric_value`) from the wiki Silver
 //! classes (Confluence today; Outline later).
 //!
 //! Adds two new rows to the `metrics` table (the FE references them by id
-//! via METRIC_REGISTRY):
-//!   • TEAM_BULLET_WIKI = ...0040 — company-wide range (median/min/max).
-//!   • IC_BULLET_WIKI   = ...0041 — per-org-unit (team) range.
+//! via `METRIC_REGISTRY)`:
+//!   • `TEAM_BULLET_WIKI` = ...0040 — company-wide range (median/min/max).
+//!   • `IC_BULLET_WIKI`   = ...0041 — per-org-unit (team) range.
 //!
-//! query_ref shape mirrors the AI bullet (m20260618_000001): a per-person
+//! `query_ref` shape mirrors the AI bullet (`m20260618_000001)`: a per-person
 //! wide-aggregate → ARRAY JOIN unpivot → outer dispatch where the marker
-//! `wiki_active_authors` aggregates with sum() of the per-person 0/1 (= count
-//! of active authors) and the counters aggregate with avg() per person; the
-//! range subquery uses count() as the marker's max scale (like the AI
-//! active-member markers). 4 metric_keys total.
+//! `wiki_active_authors` aggregates with `sum()` of the per-person 0/1 (= count
+//! of active authors) and the counters aggregate with `avg()` per person; the
+//! range subquery uses `count()` as the marker's max scale (like the AI
+//! active-member markers). 4 `metric_keys` total.
 
 use sea_orm_migration::prelude::*;
 
@@ -30,7 +30,7 @@ const ZERO_TENANT: &str = "00000000000000000000000000000000";
 /// authors. Counters are NOT here (they average per person).
 const ACTIVE_LIST: &str = "'wiki_active_authors'";
 
-/// Per-person wide-aggregate over insight.wiki_bullet_rows.
+/// Per-person wide-aggregate over `insight.wiki_bullet_rows`.
 fn wide_aggregate_pp() -> &'static str {
     "SELECT person_id, any(org_unit_id) AS org_unit_id, \
          if(countIf(metric_key = 'wiki_active_authors') > 0, toFloat64(1), CAST(NULL AS Nullable(Float64))) AS wiki_active_authors_v, \
