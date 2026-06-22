@@ -56,7 +56,7 @@ const SEEDS: &[SeedRow] = &[
     SeedRow {
         metric_key: "wiki_bullet_rows.wiki_pages_created",
         label: "Wiki Pages Created",
-        sublabel: Some("Confluence \u{b7} pages authored \u{b7} period total"),
+        sublabel: Some("Confluence/Outline \u{b7} pages authored \u{b7} period total"),
         description: Some("Wiki pages created by the person in the period (Confluence/Outline)."),
         unit: Some("pages"),
         format: None,
@@ -69,7 +69,7 @@ const SEEDS: &[SeedRow] = &[
     SeedRow {
         metric_key: "wiki_bullet_rows.wiki_edits",
         label: "Wiki Edits",
-        sublabel: Some("Confluence \u{b7} page revisions \u{b7} period total"),
+        sublabel: Some("Confluence/Outline \u{b7} page revisions \u{b7} period total"),
         description: Some("Page revisions (version_count \u{2212} 1) attributed to the person."),
         unit: Some("edits"),
         format: None,
@@ -82,7 +82,9 @@ const SEEDS: &[SeedRow] = &[
     SeedRow {
         metric_key: "wiki_bullet_rows.wiki_comments",
         label: "Wiki Comments",
-        sublabel: Some("Confluence \u{b7} comments on the person's pages \u{b7} period total"),
+        sublabel: Some(
+            "Confluence/Outline \u{b7} comments on the person's pages \u{b7} period total",
+        ),
         description: Some("Comments (footer + inline + replies) received on the person's pages."),
         unit: Some("comments"),
         format: None,
@@ -95,7 +97,7 @@ const SEEDS: &[SeedRow] = &[
     SeedRow {
         metric_key: "wiki_bullet_rows.wiki_active_authors",
         label: "Active Wiki Authors",
-        sublabel: Some("Confluence \u{b7} members who authored/edited this period"),
+        sublabel: Some("Confluence/Outline \u{b7} members who authored/edited this period"),
         description: Some("Count of members active in the wiki this period (member-scale marker)."),
         unit: None,
         format: None,
