@@ -1,11 +1,24 @@
 spec_version: 1
 description: >
-  Per-metric E2E check for meeting_hours (#1413). Seeds bronze_m365.teams_activity
-  durations for 3 people in one team and asserts the IC Bullet Collaboration
-  metric (…0012). Daily value = greatest(audio, video, screenShare) seconds / 3600
-  (longest modality), summed over the period (cross-source; only m365 here).
-  ISO-8601 durations parsed by iso8601_duration_seconds. value = member,
-  median/range = team.
+  Per-metric E2E check for meeting_hours (#1413) across its TWO data sources —
+  Teams (bronze_m365.teams_activity, data_source insight_m365) and Zoom
+  (bronze_zoom.participants, data_source insight_zoom) — which union into
+  silver.class_collab_meeting_activity. The IC Bullet Collaboration metric (…0012)
+  computes meeting_hours = Σ greatest(audio, video, screenShare) seconds / 3600
+  over the person's rows, summed ACROSS both sources (Teams + Zoom are additive;
+  Zulip is chat-only and does NOT feed meeting_hours).
+
+  Data-source matrix via a one-team (Engineering) roster, one case per person:
+    • alice — Teams (1.0h) + Zoom (1.0h)  → COMBINED 2.0h  (proves cross-source sum)
+    • bob   — Teams only (1.5h)
+    • carol — Zoom only (0.5h)
+  cohort {2.0, 1.5, 0.5} → median 1.5, range [0.5, 2.0].
+
+  Teams duration = greatest of audio/video/screenShare ISO-8601 durations. Zoom
+  duration = dateDiff(join_time, leave_time) as audio (video gated by `camera`,
+  screen-share by share_* flags — both 0 here). Dedup teeth on BOTH sources:
+  alice's Teams row (same unique_key) and Zoom row (same meeting_uuid/
+  participant_uuid/join_time) are each duplicated and must collapse, not double.
 
 bronze:
   bronze_bamboohr.employees:
@@ -13,36 +26,50 @@ bronze:
     - $ref: templates/people.yaml#/templates/bob
     - $ref: templates/people.yaml#/templates/carol
 
+  # Teams side (insight_m365): alice 1.0h, bob 1.5h. (carol has no Teams row.)
   bronze_m365.teams_activity:
     - $ref: templates/m365_teams.yaml#/templates/alice_teams
       reportRefreshDate: "2026-01-05"
       unique_key: m365-alice-meet-20260105
-      audioDuration: PT2H
-      videoDuration: PT1H
+      audioDuration: PT1H
+      videoDuration: PT0S
       screenShareDuration: PT0S
     - $ref: templates/m365_teams.yaml#/templates/alice_teams  # verbatim duplicate -> must dedup, not double
       reportRefreshDate: "2026-01-05"
       unique_key: m365-alice-meet-20260105
-      audioDuration: PT2H
-      videoDuration: PT1H
+      audioDuration: PT1H
+      videoDuration: PT0S
       screenShareDuration: PT0S
     - $ref: templates/m365_teams.yaml#/templates/bob_teams
       reportRefreshDate: "2026-01-05"
       unique_key: m365-bob-meet-20260105
-      audioDuration: PT1H
-      videoDuration: PT0S
-      screenShareDuration: PT0S
-    - $ref: templates/m365_teams.yaml#/templates/carol_teams
-      reportRefreshDate: "2026-01-05"
-      unique_key: m365-carol-meet-20260105
-      audioDuration: PT30M
+      audioDuration: PT1H30M
       videoDuration: PT0S
       screenShareDuration: PT0S
 
+  # Zoom side (insight_zoom): alice 60-min session (1.0h), carol 30-min (0.5h).
+  # (bob has no Zoom row.) Duration = leave_time - join_time; camera/share unset → 0.
+  bronze_zoom.participants:
+    - $ref: templates/zoom.yaml#/templates/alice_zoom
+      meeting_uuid: zmtg-alice-1
+      participant_uuid: zp-alice-1
+      join_time: "2026-01-05T10:00:00"
+      leave_time: "2026-01-05T11:00:00"
+    - $ref: templates/zoom.yaml#/templates/alice_zoom   # verbatim duplicate -> must dedup, not double
+      meeting_uuid: zmtg-alice-1
+      participant_uuid: zp-alice-1
+      join_time: "2026-01-05T10:00:00"
+      leave_time: "2026-01-05T11:00:00"
+    - $ref: templates/zoom.yaml#/templates/carol_zoom
+      meeting_uuid: zmtg-carol-1
+      participant_uuid: zp-carol-1
+      join_time: "2026-01-05T14:00:00"
+      leave_time: "2026-01-05T14:30:00"
+
 cases:
-  # greatest-per-day / 3600: alice greatest(7200,3600,0)=2.0h, bob 1.0h, carol 0.5h
-  #   value (alice) = 2.0 ; median[0.5,1.0,2.0] = 1.0 ; range = [0.5,2.0]
-  - name: meeting_hours — IC bullet (alice value vs team median/range)
+  # ── COMBINED (alice: Teams 1.0 + Zoom 1.0 = 2.0) ─────────────────────────────
+  # proves meeting_hours sums across both sources for the same person/day.
+  - name: "meeting_hours — alice COMBINED Teams+Zoom (cross-source sum = 2.0)"
     request:
       url: /v1/metrics/queries
       method: POST
@@ -57,4 +84,36 @@ cases:
         assert: "result.status == 'ok'"
       - in: collaboration
         find: { metric_key: meeting_hours }
-        equal: { value: 2.0, median: 1.0, range_min: 0.5, range_max: 2.0 }
+        equal: { value: 2.0, median: 1.5, range_min: 0.5, range_max: 2.0 }
+
+  # ── Teams-only (bob: 1.5) ────────────────────────────────────────────────────
+  - name: "meeting_hours — bob Teams-only (1.5)"
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'bob@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        find: { metric_key: meeting_hours }
+        equal: { value: 1.5, median: 1.5, range_min: 0.5, range_max: 2.0 }
+
+  # ── Zoom-only (carol: 0.5) ───────────────────────────────────────────────────
+  - name: "meeting_hours — carol Zoom-only (0.5)"
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'carol@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        find: { metric_key: meeting_hours }
+        equal: { value: 0.5, median: 1.5, range_min: 0.5, range_max: 2.0 }
