@@ -159,6 +159,11 @@ _SESSION_START_TRUNCATE = [
     ("silver", "class_wiki_pages"),
     ("silver", "class_wiki_engagement"),
     ("silver", "class_wiki_activity"),
+    # ai_smoke (cursor) builds staging.cursor__ai_dev_usage — an incremental
+    # `append` model guarded by a dbt `unique` test on unique_key. Without a
+    # session-start reset, a warm re-run (reused CH volume, no `./e2e.sh down`)
+    # appends the same rows again → duplicate unique_keys → the unique test fails.
+    ("staging", "cursor__ai_dev_usage"),
 ]
 
 
