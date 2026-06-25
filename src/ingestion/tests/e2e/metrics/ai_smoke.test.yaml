@@ -95,3 +95,22 @@ cases:
       - in: ai
         find: { metric_key: cursor_acceptance }
         equal: { value: 62.5 }
+      # tool-agnostic (gold Branch 1 — any AI tool row). Currently from the cursor
+      # seed only, so these mirror cursor's numbers; they change once claude_team /
+      # chatgpt_team rows join the seed.
+      - in: ai
+        find: { metric_key: active_ai_members }
+        equal: { value: 1, median: 0, range_min: 0, range_max: 3 }
+      - in: ai
+        find: { metric_key: team_ai_loc }
+        equal: { value: 40, median: 20, range_min: 10, range_max: 40 }
+      # locked stubs (ComingSoon) — not emitted by any connector → NULL.
+      - in: ai
+        find: { metric_key: claude_web }
+        equal: { value: null }
+      - in: ai
+        find: { metric_key: prs_total }
+        equal: { value: null }
+      - in: ai
+        find: { metric_key: prs_with_cc }
+        equal: { value: null }
