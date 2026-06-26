@@ -59,6 +59,7 @@ CREATE DATABASE IF NOT EXISTS bronze_slack;
 CREATE DATABASE IF NOT EXISTS bronze_bamboohr;
 CREATE DATABASE IF NOT EXISTS bronze_bitbucket_cloud;
 CREATE DATABASE IF NOT EXISTS bronze_zulip_proxy;
+CREATE DATABASE IF NOT EXISTS bronze_claude_team;
 SQL
 
 # ---------------------------------------------------------------------------
@@ -1120,6 +1121,40 @@ CREATE TABLE IF NOT EXISTS bronze_zulip_proxy.messages (
     tenant_id              Nullable(String),
     source_id              Nullable(String),
     unique_key             String,
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_claude_team.claude_team_code_metrics — per-user/day Claude Code usage
+# (claude-team-proxy → /api/claude_code/metrics_aggs/users). Column set mirrors
+# the connector InlineSchemaLoader (connectors/ai/claude-team/connector.yaml);
+# claude_team__ai_dev_usage reads status/email/metric_date/total_*/prs_*.
+if ! ch_table_exists bronze_claude_team claude_team_code_metrics; then
+  echo "  Creating placeholder: bronze_claude_team.claude_team_code_metrics"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_claude_team.claude_team_code_metrics (
+    tenant_id                  String,
+    source_id                  String,
+    unique_key                 String,
+    collected_at               Nullable(String),
+    data_source                String,
+    metric_date                Nullable(String),
+    email                      String,
+    api_key_name               Nullable(String),
+    status                     Nullable(String),
+    avg_cost_per_day           Nullable(String),
+    avg_lines_accepted_per_day Nullable(Float64),
+    total_cost                 Nullable(String),
+    total_lines_accepted       Nullable(Float64),
+    total_sessions             Nullable(Float64),
+    last_active                Nullable(String),
+    prs_with_cc                Nullable(Float64),
+    total_prs                  Nullable(Float64),
+    prs_with_cc_percentage     Nullable(Float64),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',
