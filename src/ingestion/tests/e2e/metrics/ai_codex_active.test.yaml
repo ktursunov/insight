@@ -1,10 +1,14 @@
 spec_version: 1
 description: >
-  codex_active (Codex — active members) — 1 per active codex member; an "active"
-  metric → value=1 for the requested person, range_max = team headcount.
-  bronze_chatgpt_team.chatgpt_team_codex_user_daily → chatgpt_team__ai_dev_usage
-  (tool='codex') → silver class_ai_dev_usage → gold insight.ai_bullet_rows →
-  IC Bullet AI (…0013). Twin of cc_active / cursor_active.
+  Metric: codex_active — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Codex daily per-user leaderboard — one row marks a Codex user
+    • silver: deduped to one row per user/day
+    • gold:   an "active" metric — value=1 for the requested person; range_max =
+              count of active Codex members in the team (median is 0 by rule)
+
+  Team (median/range = the person's department):
+    alice · bob · carol all active → value 1, median 0, range [0, 3].
 
 bronze:
   bronze_bamboohr.employees:

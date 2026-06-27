@@ -1,10 +1,14 @@
 spec_version: 1
 description: >
-  chatgpt_active (ChatGPT chat — active members) — 1 per active chat member; an
-  "active" metric → value=1 for the requested person, range_max = team headcount.
-  bronze_chatgpt_team.chatgpt_team_chat_activity → chatgpt_team__ai_assistant_usage
-  (tool='chatgpt') → silver class_ai_assistant_usage → gold insight.ai_bullet_rows
-  → IC Bullet AI (…0013). Twin of cc_active / codex_active.
+  Metric: chatgpt_active — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: ChatGPT daily per-user chat activity — one row marks a chat user
+    • silver: deduped to one row per user/day
+    • gold:   an "active" metric — value=1 for the requested person; range_max =
+              count of active ChatGPT chat members in the team (median is 0 by rule)
+
+  Team (median/range = the person's department):
+    alice · bob · carol all active → value 1, median 0, range [0, 3].
 
 bronze:
   bronze_bamboohr.employees:
