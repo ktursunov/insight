@@ -61,6 +61,8 @@ CREATE DATABASE IF NOT EXISTS bronze_bitbucket_cloud;
 CREATE DATABASE IF NOT EXISTS bronze_zulip_proxy;
 CREATE DATABASE IF NOT EXISTS bronze_claude_team;
 CREATE DATABASE IF NOT EXISTS bronze_claude_enterprise;
+CREATE DATABASE IF NOT EXISTS bronze_outline;
+CREATE DATABASE IF NOT EXISTS bronze_confluence;
 SQL
 
 # ---------------------------------------------------------------------------
@@ -739,6 +741,11 @@ if ! ch_table_exists bronze_jira jira_user; then
 CREATE TABLE IF NOT EXISTS bronze_jira.jira_user (
     unique_key String,
     source_id String,
+    -- tenant_id is read by confluence__wiki_pages' jira_user join (account_id →
+    -- email identity resolution). The real Airbyte stream carries it; the
+    -- placeholder omitted it, which broke that model's compile on a fresh
+    -- cluster. Nullable so connectors that seed jira_user without it still load.
+    tenant_id Nullable(String),
     account_id String,
     email Nullable(String),
     display_name Nullable(String),
@@ -1267,6 +1274,229 @@ CREATE TABLE IF NOT EXISTS bronze_claude_enterprise.claude_enterprise_users (
     cowork_metrics_json          Nullable(String),
     collected_at                 Nullable(String),
     data_source                  Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_pages — Outline document snapshot (author/version/space). Feeds outline__wiki_pages → class_wiki_pages.
+if ! ch_table_exists bronze_outline wiki_pages; then
+  echo "  Creating placeholder: bronze_outline.wiki_pages"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_pages (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    space_id                 Nullable(String),
+    title                    Nullable(String),
+    status                   Nullable(String),
+    author_id                Nullable(String),
+    author_email             Nullable(String),
+    last_editor_id           Nullable(String),
+    last_editor_email        Nullable(String),
+    parent_page_id           Nullable(String),
+    version_number           Nullable(Int64),
+    created_at               Nullable(String),
+    updated_at               Nullable(String),
+    collected_at             Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_spaces — collection metadata (LEFT JOIN in outline__wiki_pages).
+if ! ch_table_exists bronze_outline wiki_spaces; then
+  echo "  Creating placeholder: bronze_outline.wiki_spaces"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_spaces (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    space_id                 Nullable(String),
+    name                     Nullable(String),
+    url                      Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_users — user directory (LEFT JOIN for author_email in outline__wiki_pages).
+if ! ch_table_exists bronze_outline wiki_users; then
+  echo "  Creating placeholder: bronze_outline.wiki_users"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_users (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    user_id                  Nullable(String),
+    email                    Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_comments — page comments. Feeds outline__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_outline wiki_comments; then
+  echo "  Creating placeholder: bronze_outline.wiki_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    parent_comment_id        Nullable(String),
+    anchor_text              Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_pages — page snapshot (author/version/space). Feeds confluence__wiki_pages → class_wiki_pages.
+if ! ch_table_exists bronze_confluence wiki_pages; then
+  echo "  Creating placeholder: bronze_confluence.wiki_pages"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_pages (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    space_id                 Nullable(String),
+    title                    Nullable(String),
+    status                   Nullable(String),
+    author_id                Nullable(String),
+    last_editor_id           Nullable(String),
+    parent_page_id           Nullable(String),
+    version_number           Nullable(Int64),
+    created_at               Nullable(String),
+    updated_at               Nullable(String),
+    collected_at             Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_spaces — space metadata (LEFT JOIN in confluence__wiki_pages).
+if ! ch_table_exists bronze_confluence wiki_spaces; then
+  echo "  Creating placeholder: bronze_confluence.wiki_spaces"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_spaces (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    space_id                 Nullable(String),
+    name                     Nullable(String),
+    url                      Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_footer_comments — footer top-level comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_footer_comments; then
+  echo "  Creating placeholder: bronze_confluence.wiki_footer_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_footer_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_footer_comment_replies — footer replies comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_footer_comment_replies; then
+  echo "  Creating placeholder: bronze_confluence.wiki_footer_comment_replies"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_footer_comment_replies (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_inline_comments — inline top-level comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_inline_comments; then
+  echo "  Creating placeholder: bronze_confluence.wiki_inline_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_inline_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_inline_comment_replies — inline replies comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_inline_comment_replies; then
+  echo "  Creating placeholder: bronze_confluence.wiki_inline_comment_replies"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_inline_comment_replies (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',
