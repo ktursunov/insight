@@ -10,10 +10,10 @@ mod handlers;
 mod tenant_resolution_tests;
 
 use axum::http::StatusCode;
-use axum::{Router, middleware};
+use axum::{Json, Router, middleware, routing::get};
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
-use toolkit::api::{OpenApiRegistryImpl, OperationBuilder};
+use toolkit::api::{OpenApiInfo, OpenApiRegistryImpl, OperationBuilder};
 
 use crate::auth;
 use crate::config::AppConfig;
@@ -51,6 +51,27 @@ pub struct AppState {
     /// endpoints, the validation gauntlet, the `lock-enforcer` SQL, and the
     /// `audit-emitter` dual-sink contract.
     pub admin_threshold: AdminThresholdService,
+}
+
+/// OpenAPI document metadata served at `/openapi.json` and baked into the
+/// committed `docs/components/backend/analytics-api/openapi.json`.
+///
+/// `version` is the **API contract** version (stable) — deliberately NOT
+/// `CARGO_PKG_VERSION` — so the drift-check gate (`scripts/ci/openapi_spec.sh
+/// check`) fires only on real route/schema changes, not on every release bump.
+fn openapi_info() -> OpenApiInfo {
+    OpenApiInfo {
+        title: "Analytics API".to_owned(),
+        version: "1.0.0".to_owned(),
+        description: Some(
+            "Read-only query service over predefined ClickHouse metrics. Admins \
+             define metrics (named SQL queries) in MariaDB; the frontend queries \
+             them by UUID with OData-style filtering. The API Gateway mounts this \
+             service at /api/analytics."
+                .to_owned(),
+        ),
+        servers: Vec::new(),
+    }
 }
 
 /// Build the Axum router with all routes.
@@ -330,5 +351,24 @@ pub fn router(state: AppState) -> Router {
         .handler(handlers::health)
         .register(Router::new(), &openapi);
 
-    api.merge(health).with_state(state)
+    // Serve the in-process OpenAPI document at `/openapi.json` — the follow-up
+    // promised in the registry comment above. Built ONCE here from every
+    // operation registered into `openapi` (the tenant-scoped routes + /health),
+    // then cloned per request. Public + merged after the tenant middleware, same
+    // rationale as /health: docs tooling and the e2e endpoint-coverage gate fetch
+    // the contract without an `X-Insight-Tenant-Id` header. The committed copy at
+    // `docs/components/backend/analytics-api/openapi.json` is regenerated from
+    // this route by `scripts/ci/openapi_spec.sh` (a CI gate fails on drift).
+    let spec = openapi
+        .build_openapi(&openapi_info())
+        .expect("analytics-api: OpenAPI document failed to build");
+    let openapi_doc = Router::new().route(
+        "/openapi.json",
+        get(move || {
+            let spec = spec.clone();
+            async move { Json(spec) }
+        }),
+    );
+
+    api.merge(health).merge(openapi_doc).with_state(state)
 }

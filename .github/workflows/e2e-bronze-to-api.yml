@@ -99,6 +99,21 @@ jobs:
           pip install --quiet pyyaml httpx
           bash scripts/ci/metric_coverage.sh
 
+      # ─── OpenAPI spec drift gate ────────────────────────────────────────
+      # Fetches GET /openapi.json from the live analytics-api (the same built
+      # image) and fails if docs/components/backend/analytics-api/openapi.json
+      # has drifted from the router — so adding/changing a route without
+      # regenerating the committed spec (bash scripts/ci/openapi_spec.sh update)
+      # blocks merge. Runs even if the suite failed (independent of it).
+      - name: OpenAPI spec drift gate
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        env:
+          ANALYTICS_API_IMAGE: insight-e2e-analytics-api:local
+        run: |
+          pip install --quiet httpx
+          bash scripts/ci/openapi_spec.sh check
+
       # ─── Diagnostics on failure ─────────────────────────────────────────
       - name: Dump compose logs on failure
         if: failure()
