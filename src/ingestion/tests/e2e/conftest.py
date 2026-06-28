@@ -247,6 +247,26 @@ def pytest_collection_modifyitems(config, items):
     items.sort(key=lambda i: 0 if ("meta/" in str(i.path) or "api/" in str(i.path)) else 1)
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """Dump the API-endpoint ledger recorded by the httpx response hook in
+    `AnalyticsApiProcess.client()` (`lib.api_coverage.record_response`).
+
+    The standalone endpoint-coverage gate (`lib/api_coverage.py`, run as a CI
+    step after the suite) diffs this against the committed OpenAPI spec. Primary
+    worker only; best-effort — a failed artifact write is logged, never fails the
+    run (a missing ledger then fails the downstream gate loudly instead)."""
+    if not _IS_PRIMARY:
+        return
+    from lib import api_coverage
+
+    out = Path(__file__).parent / ".artifacts" / "observed_endpoints.json"
+    try:
+        api_coverage.dump_observed(out)
+        LOG.info("wrote API-endpoint ledger (%d ops): %s", len(api_coverage._OBSERVED), out)
+    except OSError as e:
+        LOG.warning("could not write API-endpoint ledger %s: %s", out, e)
+
+
 def pytest_generate_tests(metafunc):
     """Generate one `test_metric_smoke` invocation per discovered `*.test.yaml`."""
     if "test_yaml" in metafunc.fixturenames and metafunc.function.__name__ == "test_metric_smoke":

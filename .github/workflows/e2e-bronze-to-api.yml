@@ -114,6 +114,25 @@ jobs:
           pip install --quiet httpx
           bash scripts/ci/openapi_spec.sh check
 
+      # ─── API endpoint coverage gate ─────────────────────────────────────
+      # Diffs the endpoints the suite actually exercised — recorded by the httpx
+      # hook in AnalyticsApiProcess.client() and dumped at pytest_sessionfinish to
+      # .artifacts/observed_endpoints.json — against the committed OpenAPI spec.
+      # Fails if a documented operation is neither exercised nor in SKIP_LIST.
+      # Pure stdlib: reads two files, no Docker/network/deps.
+      - name: API endpoint coverage gate
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 src/ingestion/tests/e2e/lib/api_coverage.py \
+            --observed src/ingestion/tests/e2e/.artifacts/observed_endpoints.json \
+            --spec docs/components/backend/analytics-api/openapi.json \
+            --md | tee api_endpoint_coverage.md
+          rc=${PIPESTATUS[0]}
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat api_endpoint_coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$rc" -ne 0 ]; then echo "::error::API endpoint coverage gate failed — a documented route is exercised by no test and not in SKIP_LIST (or a skip is stale). See the report above."; fi
+          exit "$rc"
+
       # ─── Diagnostics on failure ─────────────────────────────────────────
       - name: Dump compose logs on failure
         if: failure()
