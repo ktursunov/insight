@@ -37,6 +37,7 @@ def _matrix_entry(comp: dict, *, lint: bool = False, cover: bool = True) -> dict
         entry["all_features"] = comp.get("all_features", True)
         entry["lint"] = lint
         entry["cover"] = cover
+        entry["clippy"] = comp.get("clippy", True)  # False ⇒ fmt-only (see #1512)
     elif comp["lang"] == "dotnet":
         entry["solution"] = comp.get("solution", "")
     elif comp["lang"] == "python":

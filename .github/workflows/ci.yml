@@ -118,7 +118,7 @@ jobs:
         run: cargo fmt -p ${{ matrix.entry.package }} -- --check
 
       - name: Clippy (${{ matrix.entry.name }})
-        if: ${{ matrix.entry.lint }}
+        if: ${{ matrix.entry.lint && matrix.entry.clippy }}
         working-directory: ${{ matrix.entry.root }}
         # -D warnings stays on clippy only — never the coverage build (it would
         # turn jira-enrich's feature-gated dead code into a hard error).

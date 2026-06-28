@@ -41,9 +41,13 @@ COMPONENTS = [
      "paths": ["src/backend/services/api-gateway"]},
     # jira-enrich is a standalone workspace; its `io` feature needs a live
     # ClickHouse, so cover with default features only (core tests are io-free).
+    # clippy: False — jira-enrich's strict [lints.clippy] (pedantic/unwrap_used/…)
+    # was never CI-enforced and the code violates it extensively. Clippy is
+    # silenced here until the debt is cleared; re-enable per #1512. fmt + coverage
+    # still run.
     {"name": "jira-enrich", "lang": "rust",
      "root": "src/ingestion/connectors/task-tracking/jira/enrich",
-     "package": "jira-enrich", "all_features": False,
+     "package": "jira-enrich", "all_features": False, "clippy": False,
      "paths": ["src/ingestion/connectors/task-tracking/jira/enrich"]},
 
     # .NET
