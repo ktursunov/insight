@@ -20,10 +20,10 @@ The skip list is the accepted baseline — inline `SKIP_LIST` (single source of
 truth, no side-car file). Kept honest: a STALE entry (key no longer in the
 catalog) or a REDUNDANT one (now value-tested) also fails. PASS iff no FAILs.
 
-This module never spawns analytics-api — it reads the universe over HTTP only.
-Entry point: `scripts/ci/metric_coverage.sh` (a step in the E2E — Bronze to API
-workflow) boots MariaDB + analytics-api and runs this with `ANALYTICS_API_URL`
-set (host needs only pyyaml + httpx). Ad hoc:
+This module never spawns analytics-api. CI: the `metric-coverage-gate` job reads
+the universe from `--universe-file catalog_metrics.json` — the artifact the e2e
+run collects (lib/collect_coverage_artifacts.py) — so no app boot. Locally:
+`./e2e.sh test` then `./e2e.sh gates`. Ad hoc against a running API:
 `ANALYTICS_API_URL=http://… python3 lib/metric_coverage.py [--md]`.
 """
 

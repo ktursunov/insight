@@ -63,7 +63,9 @@ e2e/
 │   ├── migration_applier.py    # applies src/ingestion/scripts/migrations/*.sql
 │   ├── analytics_api.py        # builds + spawns the analytics-api binary
 │   ├── worker.py               # WorkerContext (resolves pytest-xdist worker id)
-│   ├── metric_coverage.py      # metric-coverage gate logic + inline SKIP_LIST (used by scripts/ci/metric_coverage.sh)
+│   ├── metric_coverage.py      # metric-coverage gate logic + inline SKIP_LIST (--universe-file)
+│   ├── api_coverage.py         # endpoint-coverage gate logic + httpx recording hook
+│   ├── collect_coverage_artifacts.py  # script: snapshot live spec + catalog → .artifacts/
 │   └── config.py               # session config (ports, random creds)
 ├── seed/
 │   └── metrics.yaml            # optional test-specific metric overrides (default: empty)
@@ -72,9 +74,21 @@ e2e/
     └── test_session_smoke.py
 ```
 
-## Metric coverage gate
+## Coverage gates
 
-The gate runs as a dedicated step in the **E2E — Bronze to API** workflow (`.github/workflows/e2e-bronze-to-api.yml`), after the suite — via [`scripts/ci/metric_coverage.sh`](../../../../scripts/ci/metric_coverage.sh), *not* as a pytest test. It boots just MariaDB + analytics-api (reusing the `insight-e2e-analytics-api:local` image `./e2e.sh build` already produced — no ClickHouse/dbt/pytest, no second compile), reads the metric universe from the **API** (`POST /v1/catalog/get_metrics` — every enabled product `metric_key`, each a `<table>.<column>` seeded by the analytics-api migrations), and cross-checks it, **by `metric_key`**, against the keys whose value the tests assert.
+Three gates run as **separate jobs** in the **E2E — Bronze to API** workflow (`.github/workflows/e2e-bronze-to-api.yml`), *not* as pytest tests. The `e2e` job runs the suite and — while analytics-api is up — collects three inputs into `.artifacts/` (uploaded as the `coverage-inputs` artifact); three lightweight gate jobs then analyse those files (no Docker, no second app boot):
+
+- **metric-coverage-gate** — every product `metric_key` the catalog exposes (`POST /v1/catalog/get_metrics` → `catalog_metrics.json`) has its value asserted by a test, or a `SKIP_LIST` entry.
+- **openapi-spec-drift-gate** — the committed `docs/components/backend/analytics-api/openapi.json` matches the live router (`GET /openapi.json` → `openapi.live.json`).
+- **api-endpoint-coverage-gate** — every documented route is exercised by a test (recorded via the httpx hook → `observed_endpoints.json`), or skip-listed.
+
+Locally, after a run:
+
+```bash
+./e2e.sh test     # runs the suite + collects .artifacts/{catalog_metrics,openapi.live,observed_endpoints}.json
+./e2e.sh gates    # runs all three gates against .artifacts/ (inside the runner image; no DB)
+bash scripts/ci/openapi_spec.sh update   # regenerate the committed OpenAPI doc from .artifacts/openapi.live.json
+```
 
 The verdict per **metric_key** (each individual number) is **binary**:
 
@@ -85,8 +99,8 @@ The verdict per **metric_key** (each individual number) is **binary**:
 Catalog keys are dotted (`collab_bullet_rows.m365_emails_sent`); a test asserts the bare response key (`m365_emails_sent`). The column suffix is unique across the catalog, so the gate maps bare→dotted by suffix (a future collision raises). `SKIP_LIST` is the accepted baseline and single source of truth (no side-car file — just `(metric_key, reason)`). Kept honest: a **stale** entry (key no longer in the catalog), a **redundant** one (now value-tested), or a test asserting a **non-catalog** key (typo / unseeded → matches 0 rows) all fail. PASS iff no FAILs.
 
 ```bash
-bash scripts/ci/metric_coverage.sh      # the gate: build+boot analytics-api, diff, exit non-zero on failure
-# ad hoc against a running analytics-api:
+./e2e.sh gates                          # all three gates against .artifacts/ (after ./e2e.sh test)
+# ad hoc against a running analytics-api (no artifact):
 ANALYTICS_API_URL=http://localhost:18081 python3 lib/metric_coverage.py --md
 ```
 

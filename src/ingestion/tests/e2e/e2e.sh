@@ -76,8 +76,28 @@ case "$cmd" in
     logs)
         docker compose "${COMPOSE_FILES[@]}" logs --tail=200 "$@"
         ;;
+    gates)
+        # Run the three coverage gates against the inputs a prior `./e2e.sh test`
+        # collected into .artifacts/ — pure file analysis inside the runner image
+        # (no DB via --no-deps, no second compose). Run `./e2e.sh test` first; the
+        # same checks run in CI as the gate jobs (see e2e-bronze-to-api.yml).
+        if [ ! -f .artifacts/observed_endpoints.json ]; then
+            echo "no .artifacts/ — run './e2e.sh test' first (it collects the gate inputs)" >&2
+            exit 2
+        fi
+        spec=/workspace/docs/components/backend/analytics-api/openapi.json
+        run=(docker compose "${COMPOSE_FILES[@]}" run --rm --no-deps -T runner)
+        rc=0
+        echo "── metric coverage ──"
+        "${run[@]}" python3 lib/metric_coverage.py --universe-file .artifacts/catalog_metrics.json --md || rc=1
+        echo "── openapi spec drift ──"
+        "${run[@]}" python3 /workspace/scripts/ci/openapi_spec.py check --live-file .artifacts/openapi.live.json --file "$spec" || rc=1
+        echo "── api endpoint coverage ──"
+        "${run[@]}" python3 lib/api_coverage.py --observed .artifacts/observed_endpoints.json --spec "$spec" --md || rc=1
+        exit "$rc"
+        ;;
     *)
-        echo "usage: $0 {build|test|run|shell|up|down|logs} [args...]" >&2
+        echo "usage: $0 {build|test|run|shell|up|down|logs|gates} [args...]" >&2
         exit 2
         ;;
 esac

@@ -6,11 +6,12 @@ The live contract is the in-process registry served at ``GET /openapi.json``
 and either rewrites the committed copy (``write``) or fails on any drift
 (``check``), so the doc can never silently fall behind the router.
 
-Host deps: ``httpx`` only (stdlib otherwise). URL mode — needs a running
-analytics-api reachable at ``$ANALYTICS_API_URL``; ``scripts/ci/openapi_spec.sh``
-boots a throwaway one.
+Two live-spec sources:
+  --live-file <openapi.live.json>  the artifact the e2e run collects (CI gate +
+                                   `scripts/ci/openapi_spec.sh`; stdlib only)
+  --url / $ANALYTICS_API_URL       fetch a running analytics-api (needs httpx)
 
-    ANALYTICS_API_URL=http://localhost:18081 python3 scripts/ci/openapi_spec.py check
+    python3 scripts/ci/openapi_spec.py check --live-file .../openapi.live.json
     ANALYTICS_API_URL=http://localhost:18081 python3 scripts/ci/openapi_spec.py write
 """
 
