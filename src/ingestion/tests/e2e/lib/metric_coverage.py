@@ -281,51 +281,115 @@ def gate_violations(r: CoverageReport) -> list[str]:
     return out
 
 
+# Friendly vector names for the storage tables (display only).
+_VECTOR_NAMES = {
+    "collab_bullet_rows": "Collaboration",
+    "task_delivery_bullet_rows": "Task Delivery",
+    "ai_bullet_rows": "AI Adoption",
+    "git_bullet_rows": "Git Activity",
+    "code_quality_bullet_rows": "Code Quality",
+    "crm_bullet_rows": "CRM / Sales",
+    "support_bullet_rows": "Support",
+    "wiki_bullet_rows": "Wiki / Knowledge",
+    "ic_kpis": "IC KPIs (heatmap)",
+}
+
+
+def _vector(metric_key: str) -> str:
+    return metric_key.split(".", 1)[0]
+
+
+def _vector_name(table: str) -> str:
+    return _VECTOR_NAMES.get(table, table)
+
+
 def _by_table(keys) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     for k in keys:
-        groups.setdefault(k.split(".", 1)[0], []).append(k)
+        groups.setdefault(_vector(k), []).append(k)
     return groups
+
+
+def _pct(n: int, d: int) -> str:
+    return f"{round(100 * n / d)}%" if d else "—"
+
+
+def _is_reachable(reason: str) -> bool:
+    """A skip whose fixtures already exist — the actionable backlog."""
+    return reason.lower().startswith("reachable")
 
 
 def render_text(r: CoverageReport) -> str:
     cov, skp, tot = len(r.covered), len(r.skipped_active), len(r.universe)
+    backlog = [k for k in r.skipped_active if _is_reachable(r.skips[k])]
     lines = [
         f"Metric coverage (by metric_key): {'PASS' if r.passed else 'FAIL'}  "
-        f"({cov}/{tot} value-tested, {skp} baseline; {len(r.uncovered)} missing)",
+        f"({cov}/{tot} validated {_pct(cov, tot)}, {skp} skipped [{len(backlog)} reachable], "
+        f"{len(r.uncovered)} missing)",
     ]
     for t, keys in sorted(_by_table(r.universe).items()):
         c = sum(1 for k in keys if k in r.covered)
-        lines.append(f"  {t}: {c}/{len(keys)} tested")
+        lines.append(f"  {_vector_name(t):20} {c}/{len(keys)}")
     for v in gate_violations(r):
         lines.append(f"  ✗ {v}")
     return "\n".join(lines)
 
 
 def render_markdown(r: CoverageReport) -> str:
-    """Markdown status table — binary verdict per metric_key, grouped by storage
-    table, plus a skip-list-hygiene footer (redundant/stale/unknown also fail)."""
-    cov, skp, tot = len(r.covered), len(r.skipped_active), len(r.universe)
+    """Markdown report: a per-vector summary + the reachable backlog up top, then
+    the full per-key detail (collapsed), then a skip-list-hygiene footer."""
+    cov, skp, tot, miss = (
+        len(r.covered), len(r.skipped_active), len(r.universe), len(r.uncovered),
+    )
     out = [
         "# Metric coverage — by metric_key",
         "",
-        f"**Gate: {'✅ PASS' if r.passed else '❌ FAIL'}.** {cov}/{tot} value-tested, "
-        f"{skp} baseline-skipped, **{len(r.uncovered)} missing**.",
+        f"**Gate: {'✅ PASS' if r.passed else '❌ FAIL'}.** "
+        f"{cov}/{tot} numbers validated ({_pct(cov, tot)}) · {skp} baseline-skipped · "
+        f"**{miss} missing**.",
     ]
-    for t, keys in sorted(_by_table(r.universe).items()):
-        keys = sorted(keys)
-        c = sum(1 for k in keys if k in r.covered)
-        out += ["", f"## {t} — {c}/{len(keys)} tested", "",
-                "| verdict | metric_key | detail |", "|---|---|---|"]
-        for k in keys:
-            col = suffix(k)
-            if k in r.uncovered:
-                out.append(f"| ❌ MISSING | `{col}` | no value assertion, not skip-listed |")
-            elif k in r.covered:
-                out.append(f"| ✅ tested | `{col}` | {', '.join(sorted(r.files_for(k)))} |")
-            else:
-                out.append(f"| ⏭️ baseline | `{col}` | {r.skips[k]} |")
 
+    # ── Per-vector summary ───────────────────────────────────────────────────
+    tables = _by_table(r.universe)
+    out += ["", "## Coverage by vector", "",
+            "| vector | tested | skipped | missing | coverage |",
+            "|---|--:|--:|--:|--:|"]
+    for t in sorted(tables, key=lambda x: (-sum(1 for k in tables[x] if k in r.covered), x)):
+        keys = tables[t]
+        c = sum(1 for k in keys if k in r.covered)
+        s = sum(1 for k in keys if k in r.skipped_active)
+        m = sum(1 for k in keys if k in r.uncovered)
+        out.append(f"| {_vector_name(t)} | {c} | {s} | {m} | {_pct(c, len(keys))} |")
+    out.append(f"| **Total** | **{cov}** | **{skp}** | **{miss}** | **{_pct(cov, tot)}** |")
+
+    # ── Reachable backlog (fixtures exist — just write the assertion) ─────────
+    backlog = sorted(k for k in r.skipped_active if _is_reachable(r.skips[k]))
+    if backlog:
+        out += ["", f"## Reachable now — backlog ({len(backlog)})",
+                "_Fixtures already exist; each just needs a `find:`+`equal` assertion in a test._",
+                ""]
+        for k in backlog:
+            out.append(f"- **{r.universe[k] or suffix(k)}** — `{suffix(k)}` ({_vector_name(_vector(k))})")
+
+    # ── Full per-key detail (collapsed) ──────────────────────────────────────
+    out += ["", "<details><summary>Per-key detail (all "
+            f"{tot})</summary>", ""]
+    for t in sorted(tables):
+        keys = sorted(tables[t])
+        c = sum(1 for k in keys if k in r.covered)
+        out += ["", f"### {_vector_name(t)} (`{t}`) — {c}/{len(keys)}", "",
+                "| verdict | metric | key | detail |", "|---|---|---|---|"]
+        for k in keys:
+            col, label = suffix(k), (r.universe[k] or suffix(k))
+            if k in r.uncovered:
+                out.append(f"| ❌ MISSING | {label} | `{col}` | no value assertion, not skip-listed |")
+            elif k in r.covered:
+                out.append(f"| ✅ tested | {label} | `{col}` | {', '.join(sorted(r.files_for(k)))} |")
+            else:
+                out.append(f"| ⏭️ baseline | {label} | `{col}` | {r.skips[k]} |")
+    out += ["", "</details>"]
+
+    # ── Skip-list hygiene (these also fail the gate) ─────────────────────────
     hygiene: list[str] = []
     for k in sorted(r.redundant_skips):
         hygiene.append(f"- `{k}` skip-listed but now tested by [{', '.join(sorted(r.files_for(k)))}]; remove from SKIP_LIST.")
