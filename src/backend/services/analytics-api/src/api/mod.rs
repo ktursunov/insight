@@ -95,7 +95,7 @@ fn openapi_info() -> OpenApiInfo {
 // One `OperationBuilder` chain per endpoint makes this a long-but-flat route
 // table; splitting it across helpers would only obscure the 1:1 route↔handler map.
 #[allow(clippy::too_many_lines)]
-pub fn router(state: AppState) -> anyhow::Result<Router> {
+pub fn router(state: AppState) -> Router {
     let state = Arc::new(state);
 
     // In-process OpenAPI registry. Required by `OperationBuilder::register`;
@@ -359,14 +359,23 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     // the contract without an `X-Insight-Tenant-Id` header. The committed copy at
     // `docs/components/backend/analytics-api/openapi.json` is regenerated from
     // this route by `scripts/ci/openapi_spec.sh` (a CI gate fails on drift).
-    let spec = openapi.build_openapi(&openapi_info())?;
-    let openapi_doc = Router::new().route(
-        "/openapi.json",
-        get(move || {
-            let spec = spec.clone();
-            async move { Json(spec) }
-        }),
-    );
+    // `build_openapi` can only fail on a malformed `OperationSpec` (a code bug,
+    // caught by the spec-drift CI gate). The workspace denies expect()/unwrap()
+    // and `router()` stays infallible, so on that error we log and omit the route
+    // rather than panic or thread a `Result` through `router()` + its caller.
+    let openapi_doc = match openapi.build_openapi(&openapi_info()) {
+        Ok(spec) => Router::new().route(
+            "/openapi.json",
+            get(move || {
+                let spec = spec.clone();
+                async move { Json(spec) }
+            }),
+        ),
+        Err(e) => {
+            tracing::error!("analytics-api: OpenAPI document failed to build: {e}");
+            Router::new()
+        }
+    };
 
-    Ok(api.merge(health).merge(openapi_doc).with_state(state))
+    api.merge(health).merge(openapi_doc).with_state(state)
 }
