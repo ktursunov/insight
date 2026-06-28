@@ -52,95 +52,97 @@ _WHERE = "SKIP_LIST in lib/metric_coverage.py"
 # accepted baseline. Each `(metric_key, reason)`. A served metric_key that is
 # neither value-asserted by a test nor listed here FAILS the gate. When a test
 # starts asserting one, DELETE its row (a now-tested skip fails the gate).
-# "reachable: …" entries are the actionable backlog (fixtures exist).
+# The reason is shown verbatim as the skip's status in the report, so keep it a
+# concise phrase ("needs Bitbucket connector", "reachable — Jira fixtures exist").
+# "reachable …" entries are the actionable backlog (fixtures exist).
 SKIP_LIST: list[tuple[str, str]] = [
     # ai_bullet_rows.*
-    ("ai_bullet_rows.active_ai_members", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.ai_loc_share2", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_active", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_cost", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_lines", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_overage", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_sessions", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_tool_accept", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cc_tool_acceptance", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.chatgpt", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.chatgpt_active", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.claude_web", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.codex_active", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.codex_lines", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.codex_sessions", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cursor_acceptance", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cursor_active", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cursor_agents", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cursor_completions", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.cursor_lines", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.prs_total", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.prs_with_cc", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
-    ("ai_bullet_rows.team_ai_loc", "needs cursor / claude_code / chatgpt_team bronze fixtures."),
+    ("ai_bullet_rows.active_ai_members", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.ai_loc_share2", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_active", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_cost", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_lines", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_overage", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_sessions", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_tool_accept", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cc_tool_acceptance", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.chatgpt", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.chatgpt_active", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.claude_web", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.codex_active", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.codex_lines", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.codex_sessions", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cursor_acceptance", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cursor_active", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cursor_agents", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cursor_completions", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.cursor_lines", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.prs_total", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.prs_with_cc", "needs Cursor/Claude/ChatGPT connector"),
+    ("ai_bullet_rows.team_ai_loc", "needs Cursor/Claude/ChatGPT connector"),
     # code_quality_bullet_rows.*
-    ("code_quality_bullet_rows.build_success", "needs bitbucket / CI bronze fixtures."),
-    ("code_quality_bullet_rows.pr_cycle_time", "needs bitbucket / CI bronze fixtures."),
-    ("code_quality_bullet_rows.prs_per_dev", "needs bitbucket / CI bronze fixtures."),
+    ("code_quality_bullet_rows.build_success", "needs Bitbucket/CI connector"),
+    ("code_quality_bullet_rows.pr_cycle_time", "needs Bitbucket/CI connector"),
+    ("code_quality_bullet_rows.prs_per_dev", "needs Bitbucket/CI connector"),
     # collab_bullet_rows.*
-    ("collab_bullet_rows.slack_active_days", "needs a Slack connector (no rig fixtures)."),
-    ("collab_bullet_rows.slack_channel_posts", "needs a Slack connector (no rig fixtures)."),
-    ("collab_bullet_rows.slack_messages_sent", "needs a Slack connector (no rig fixtures)."),
-    ("collab_bullet_rows.slack_msgs_per_active_day", "needs a Slack connector (no rig fixtures)."),
-    ("collab_bullet_rows.zoom_meeting_hours", "reachable: zoom fixtures exist — test pending."),
-    ("collab_bullet_rows.zoom_meetings", "reachable: zoom fixtures exist — test pending."),
+    ("collab_bullet_rows.slack_active_days", "needs Slack connector"),
+    ("collab_bullet_rows.slack_channel_posts", "needs Slack connector"),
+    ("collab_bullet_rows.slack_messages_sent", "needs Slack connector"),
+    ("collab_bullet_rows.slack_msgs_per_active_day", "needs Slack connector"),
+    ("collab_bullet_rows.zoom_meeting_hours", "reachable — Zoom fixtures exist"),
+    ("collab_bullet_rows.zoom_meetings", "reachable — Zoom fixtures exist"),
     # crm_bullet_rows.*
-    ("crm_bullet_rows.avg_deal_size", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.calls", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.comms_per_won", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.cycle_days", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.deals_opened", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.emails", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.meetings", "needs hubspot bronze fixtures."),
-    ("crm_bullet_rows.win_rate", "needs hubspot bronze fixtures."),
+    ("crm_bullet_rows.avg_deal_size", "needs HubSpot connector"),
+    ("crm_bullet_rows.calls", "needs HubSpot connector"),
+    ("crm_bullet_rows.comms_per_won", "needs HubSpot connector"),
+    ("crm_bullet_rows.cycle_days", "needs HubSpot connector"),
+    ("crm_bullet_rows.deals_opened", "needs HubSpot connector"),
+    ("crm_bullet_rows.emails", "needs HubSpot connector"),
+    ("crm_bullet_rows.meetings", "needs HubSpot connector"),
+    ("crm_bullet_rows.win_rate", "needs HubSpot connector"),
     # git_bullet_rows.*
-    ("git_bullet_rows.clean_loc", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.commits", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.commits_per_active_day", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.lines_per_commit", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.merge_rate", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.pr_size", "needs bitbucket bronze fixtures."),
-    ("git_bullet_rows.prs_created", "needs bitbucket bronze fixtures."),
+    ("git_bullet_rows.clean_loc", "needs Bitbucket connector"),
+    ("git_bullet_rows.commits", "needs Bitbucket connector"),
+    ("git_bullet_rows.commits_per_active_day", "needs Bitbucket connector"),
+    ("git_bullet_rows.lines_per_commit", "needs Bitbucket connector"),
+    ("git_bullet_rows.merge_rate", "needs Bitbucket connector"),
+    ("git_bullet_rows.pr_size", "needs Bitbucket connector"),
+    ("git_bullet_rows.prs_created", "needs Bitbucket connector"),
     # ic_kpis.*
-    ("ic_kpis.ai_loc_share_pct", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.ai_sessions", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.bugs_fixed", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.focus_time_pct", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.pr_cycle_time_h", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.prs_merged", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
-    ("ic_kpis.tasks_closed", "composite heatmap KPI — needs cursor + bitbucket fixtures alongside jira/m365."),
+    ("ic_kpis.ai_loc_share_pct", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.ai_sessions", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.bugs_fixed", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.focus_time_pct", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.pr_cycle_time_h", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.prs_merged", "composite KPI — needs Cursor+Bitbucket"),
+    ("ic_kpis.tasks_closed", "composite KPI — needs Cursor+Bitbucket"),
     # support_bullet_rows.*
-    ("support_bullet_rows.support_active", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_csat", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_kb", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_private_comments", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_public_comments", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_solved", "needs zendesk bronze fixtures."),
-    ("support_bullet_rows.support_updates", "needs zendesk bronze fixtures."),
-    # task_delivery_bullet_rows.*  (reachable — jira fixtures exist; drain this backlog)
-    ("task_delivery_bullet_rows.avg_slip", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.estimation_accuracy", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.flow_efficiency", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.mean_time_to_resolution", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.on_time_delivery", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.overrun_ratio", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.pickup_time", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.scope_completion", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.scope_creep", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.stale_in_progress", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.task_dev_time", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.task_reopen_rate", "reachable: jira fixtures exist — test pending."),
-    ("task_delivery_bullet_rows.worklog_logging_accuracy", "reachable: jira fixtures exist — test pending."),
+    ("support_bullet_rows.support_active", "needs Zendesk connector"),
+    ("support_bullet_rows.support_csat", "needs Zendesk connector"),
+    ("support_bullet_rows.support_kb", "needs Zendesk connector"),
+    ("support_bullet_rows.support_private_comments", "needs Zendesk connector"),
+    ("support_bullet_rows.support_public_comments", "needs Zendesk connector"),
+    ("support_bullet_rows.support_solved", "needs Zendesk connector"),
+    ("support_bullet_rows.support_updates", "needs Zendesk connector"),
+    # task_delivery_bullet_rows.*
+    ("task_delivery_bullet_rows.avg_slip", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.estimation_accuracy", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.flow_efficiency", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.mean_time_to_resolution", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.on_time_delivery", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.overrun_ratio", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.pickup_time", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.scope_completion", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.scope_creep", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.stale_in_progress", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.task_dev_time", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.task_reopen_rate", "reachable — Jira fixtures exist"),
+    ("task_delivery_bullet_rows.worklog_logging_accuracy", "reachable — Jira fixtures exist"),
     # wiki_bullet_rows.*
-    ("wiki_bullet_rows.wiki_active_authors", "needs confluence / outline bronze fixtures."),
-    ("wiki_bullet_rows.wiki_comments", "needs confluence / outline bronze fixtures."),
-    ("wiki_bullet_rows.wiki_edits", "needs confluence / outline bronze fixtures."),
-    ("wiki_bullet_rows.wiki_pages_created", "needs confluence / outline bronze fixtures."),
+    ("wiki_bullet_rows.wiki_active_authors", "needs Confluence/Outline connector"),
+    ("wiki_bullet_rows.wiki_comments", "needs Confluence/Outline connector"),
+    ("wiki_bullet_rows.wiki_edits", "needs Confluence/Outline connector"),
+    ("wiki_bullet_rows.wiki_pages_created", "needs Confluence/Outline connector"),
 ]
 
 
@@ -319,6 +321,14 @@ def _is_reachable(reason: str) -> bool:
     return reason.lower().startswith("reachable")
 
 
+def _skips_by_reason(r: CoverageReport) -> list[tuple[str, int]]:
+    """`[(reason, count)]` over active skips, most-common first."""
+    counts: dict[str, int] = {}
+    for k in r.skipped_active:
+        counts[r.skips[k]] = counts.get(r.skips[k], 0) + 1
+    return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+
+
 def render_text(r: CoverageReport) -> str:
     cov, skp, tot = len(r.covered), len(r.skipped_active), len(r.universe)
     backlog = [k for k in r.skipped_active if _is_reachable(r.skips[k])]
@@ -330,6 +340,8 @@ def render_text(r: CoverageReport) -> str:
     for t, keys in sorted(_by_table(r.universe).items()):
         c = sum(1 for k in keys if k in r.covered)
         lines.append(f"  {_vector_name(t):20} {c}/{len(keys)}")
+    for reason, n in _skips_by_reason(r):
+        lines.append(f"  skip[{n:>2}] {reason}")
     for v in gate_violations(r):
         lines.append(f"  ✗ {v}")
     return "\n".join(lines)
@@ -362,6 +374,13 @@ def render_markdown(r: CoverageReport) -> str:
         out.append(f"| {_vector_name(t)} | {c} | {s} | {m} | {_pct(c, len(keys))} |")
     out.append(f"| **Total** | **{cov}** | **{skp}** | **{miss}** | **{_pct(cov, tot)}** |")
 
+    # ── Why the skips are skipped ────────────────────────────────────────────
+    by_reason = _skips_by_reason(r)
+    if by_reason:
+        out += ["", "## Skipped — by reason", "", "| reason | keys |", "|---|--:|"]
+        for reason, n in by_reason:
+            out.append(f"| {reason} | {n} |")
+
     # ── Reachable backlog (fixtures exist — just write the assertion) ─────────
     backlog = sorted(k for k in r.skipped_active if _is_reachable(r.skips[k]))
     if backlog:
@@ -378,7 +397,7 @@ def render_markdown(r: CoverageReport) -> str:
         keys = sorted(tables[t])
         c = sum(1 for k in keys if k in r.covered)
         out += ["", f"### {_vector_name(t)} (`{t}`) — {c}/{len(keys)}", "",
-                "| verdict | metric | key | detail |", "|---|---|---|---|"]
+                "| status | metric | key | detail |", "|---|---|---|---|"]
         for k in keys:
             col, label = suffix(k), (r.universe[k] or suffix(k))
             if k in r.uncovered:
@@ -386,7 +405,7 @@ def render_markdown(r: CoverageReport) -> str:
             elif k in r.covered:
                 out.append(f"| ✅ tested | {label} | `{col}` | {', '.join(sorted(r.files_for(k)))} |")
             else:
-                out.append(f"| ⏭️ baseline | {label} | `{col}` | {r.skips[k]} |")
+                out.append(f"| ⏭️ {r.skips[k]} | {label} | `{col}` | |")
     out += ["", "</details>"]
 
     # ── Skip-list hygiene (these also fail the gate) ─────────────────────────
