@@ -225,6 +225,21 @@ CREATE TABLE IF NOT EXISTS silver.class_ai_dev_usage (
     _version             UInt64
 ) ENGINE = ReplacingMergeTree(_version) ORDER BY (email, day) COMMENT 'INSIGHT_PLACEHOLDER_v1';
 SQL
+else
+  echo "  Reconciling placeholder schema: silver.class_ai_dev_usage"
+  run_ch <<'SQL'
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS source_id String;
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS unique_key String;
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS api_key_id Nullable(String);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS lines_removed Nullable(Float64);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS total_lines_removed Nullable(Float64);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS commits_count Nullable(UInt32);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS pull_requests_count Nullable(UInt32);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS tool_action_breakdown_json Nullable(String);
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS source String;
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS data_source String;
+ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS collected_at Nullable(DateTime64(3));
+SQL
 fi
 
 # silver.class_ai_overage — per-seat AI spend-vs-limit (Claude Team). Referenced
@@ -958,6 +973,19 @@ CREATE TABLE IF NOT EXISTS bronze_zoom.participants (
     _airbyte_meta          String        DEFAULT '{}',
     _airbyte_generation_id UInt32        DEFAULT 0
 ) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY email;
+SQL
+else
+  echo "  Reconciling placeholder schema: bronze_zoom.participants"
+  run_ch <<'SQL'
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS tenant_id String;
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS source_id String;
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS user_name Nullable(String);
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS participant_uuid String;
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS camera Nullable(String);
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS share_desktop Nullable(Bool);
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS share_application Nullable(Bool);
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS share_whiteboard Nullable(Bool);
+ALTER TABLE bronze_zoom.participants ADD COLUMN IF NOT EXISTS video_connection_type Nullable(String);
 SQL
 fi
 
