@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from lib import api_coverage
 from lib.config import SessionConfig, TENANT_HEADER, TEST_TENANT_ID
 
 LOG = logging.getLogger("e2e.api")
@@ -189,6 +190,11 @@ class AnalyticsApiProcess:
             base_url=self.base_url,
             timeout=30.0,
             headers={TENANT_HEADER: str(TEST_TENANT_ID)},
+            # Record every (method, path, status) the suite exercises so the
+            # standalone endpoint-coverage gate (lib/api_coverage.py) can diff it
+            # against the OpenAPI spec. This is THE chokepoint — metric tests
+            # (call_request) and smoke tests both go through client().
+            event_hooks={"response": [api_coverage.record_response]},
         )
 
     def call_request(self, request: dict) -> tuple[int, Any]:

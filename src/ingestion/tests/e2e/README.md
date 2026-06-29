@@ -63,12 +63,34 @@ e2e/
 │   ├── migration_applier.py    # applies src/ingestion/scripts/migrations/*.sql
 │   ├── analytics_api.py        # builds + spawns the analytics-api binary
 │   ├── worker.py               # WorkerContext (resolves pytest-xdist worker id)
+│   ├── api_coverage.py         # endpoint-coverage gate logic + httpx recording hook
+│   ├── collect_openapi_spec.py # script: snapshot live GET /openapi.json → .artifacts/
 │   └── config.py               # session config (ports, random creds)
 ├── seed/
 │   └── metrics.yaml            # optional test-specific metric overrides (default: empty)
 ├── metrics/                      # <name>.test.yaml + schemas/ + templates/
 └── meta/                       # framework's own smoke tests
     └── test_session_smoke.py
+```
+
+## API coverage gates
+
+These checks run in the **E2E — Bronze to API** workflow (`.github/workflows/e2e-bronze-to-api.yml`), *not* as pytest tests. The `e2e` job runs the suite and — while analytics-api is up — collects two inputs into `.artifacts/` (uploaded as the `coverage-inputs` artifact); the analysis then reads those files (no Docker, no second app boot):
+
+- **openapi-spec-drift-gate** (blocking CI job) — the committed `docs/components/backend/analytics-api/openapi.json` matches the live router (`GET /openapi.json` → `openapi.live.json`). The committed doc is the contract docs tooling and the endpoint gate read, so it must not rot; regenerate it with `python3 scripts/ci/openapi_spec.py update` and commit.
+- **endpoint coverage** (observability, **non-blocking**) — the suite records which routes it exercises (the httpx response hook in `AnalyticsApiProcess.client()` → `observed_endpoints.json`). `lib/api_coverage.py` reports, per documented operation, whether the suite hit it and which declared status codes were validated. It is **not** a CI gate: a read-only metric suite touches few routes (most are write/admin), so a pass/fail there would be ~all skip-list. `./e2e.sh gates` prints it as info.
+
+The endpoint coverage universe is the committed OpenAPI spec (kept honest by the drift gate). The verdict per **operation** (`METHOD path`) is binary: **exercised** by the suite → PASS; in the inline `SKIP_LIST` in [`lib/api_coverage.py`](lib/api_coverage.py) → baseline PASS; neither → FAIL. The skip list is kept honest too — a **redundant** entry (now exercised) or a **stale** one (no longer in the spec) both fail.
+
+Locally, after a run:
+
+```bash
+./e2e.sh test     # runs the suite + collects .artifacts/{openapi.live,observed_endpoints}.json
+./e2e.sh gates    # openapi spec-drift gate (blocking) + endpoint coverage report, against .artifacts/
+python3 scripts/ci/openapi_spec.py update   # regenerate the committed OpenAPI doc from .artifacts/openapi.live.json
+
+# ad hoc against a running analytics-api (no artifact):
+ANALYTICS_API_URL=http://localhost:18081 python3 scripts/ci/openapi_spec.py check
 ```
 
 ## Ports (loopback only)

@@ -7,6 +7,13 @@ name: E2E — Bronze to API
 # defined at src/ingestion/tests/e2e/compose/Dockerfile.runner. The same
 # image is used for local development via src/ingestion/tests/e2e/e2e.sh.
 #
+# Topology: ONE heavy job (`e2e`) boots the stack, runs the suite, and — while
+# analytics-api is already up — collects the API coverage inputs into
+# `.artifacts/`, which it uploads. A lightweight spec-drift gate job then analyses
+# them as a pure-Python check (no Docker, no app boot), surfacing as its own
+# required-able status. See src/ingestion/tests/e2e/lib/api_coverage.py and
+# scripts/ci/openapi_spec.py.
+#
 # Specs: docs/domain/bronze-to-api-e2e/specs/
 # Code:  src/ingestion/tests/e2e/
 
@@ -73,8 +80,32 @@ jobs:
       # migrations, and the shared dbt target/ dir is deleted by whichever
       # worker finishes first). Wall-time cost is negligible: the runner image
       # build (which compiles analytics-api + enrich) dominates the job.
+      #
+      # The suite ALSO emits .artifacts/ while analytics-api is up:
+      #   • observed_endpoints.json  (conftest.pytest_sessionfinish — httpx hook ledger)
+      #   • openapi.live.json        (lib/collect_openapi_spec.py)
+      # The gate job below analyses these — no second app boot.
       - name: Run E2E suite
         run: ./e2e.sh test --tb=short -q
+
+      # ─── Hand the collected inputs to the gate job ─────────────────────
+      # Uploaded even if the suite failed (sessionfinish + the collection script
+      # still run), so the gate reports alongside a red suite. `path` is workspace-
+      # relative (actions ignore defaults.run.working-directory).
+      - name: Upload coverage inputs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-inputs
+          path: src/ingestion/tests/e2e/.artifacts/
+          # `.artifacts/` is a dotdir; upload-artifact@v4 skips hidden paths by
+          # default (include-hidden-files: false) — without this it uploads
+          # nothing and the gate job fails with "artifact not found".
+          include-hidden-files: true
+          # The gate job is useless without these; fail loudly here rather
+          # than as a confusing downstream "artifact not found" error.
+          if-no-files-found: error
+          retention-days: 7
 
       # ─── Diagnostics on failure ─────────────────────────────────────────
       - name: Dump compose logs on failure
@@ -90,3 +121,38 @@ jobs:
       - name: Tear down
         if: always()
         run: ./e2e.sh down || true
+
+  # ─── Gate job — pure-Python analysis of the collected artifacts ──────────
+  # Runs only after `e2e` (needs), downloads `coverage-inputs`, and reads plain
+  # files. No Docker, no analytics-api boot. `!cancelled()` so it still reports
+  # when the suite itself failed (the artifacts are usually present).
+
+  openapi-spec-drift-gate:
+    name: OpenAPI spec drift gate
+    needs: e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-inputs
+          path: coverage-inputs
+      - name: Check committed spec vs live router
+        run: |
+          python3 scripts/ci/openapi_spec.py check \
+            --live-file coverage-inputs/openapi.live.json | tee openapi_drift.txt
+          rc=${PIPESTATUS[0]}
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then { echo '```'; cat openapi_drift.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$rc" -ne 0 ]; then echo "::error::OpenAPI spec drift — docs/components/backend/analytics-api/openapi.json is stale. Regenerate locally: ./e2e.sh test && python3 scripts/ci/openapi_spec.py update"; fi
+          exit "$rc"
+
+  # NOTE: endpoint coverage is NOT a blocking gate. The suite records the routes
+  # it exercises (httpx hook -> observed_endpoints.json, in the coverage-inputs
+  # artifact) for observability; `./e2e.sh gates` prints the report locally. A
+  # read-only metric suite touches few routes (most are write/admin), so a pass/fail
+  # gate there would be ~all skip-list — not worth blocking merge.

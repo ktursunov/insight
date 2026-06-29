@@ -10,10 +10,10 @@ mod handlers;
 mod tenant_resolution_tests;
 
 use axum::http::StatusCode;
-use axum::{Router, middleware};
+use axum::{Json, Router, middleware, routing::get};
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
-use toolkit::api::{OpenApiRegistryImpl, OperationBuilder};
+use toolkit::api::{OpenApiInfo, OpenApiRegistryImpl, OperationBuilder};
 
 use crate::auth;
 use crate::config::AppConfig;
@@ -53,6 +53,27 @@ pub struct AppState {
     pub admin_threshold: AdminThresholdService,
 }
 
+/// `OpenAPI` document metadata served at `/openapi.json` and baked into the
+/// committed `docs/components/backend/analytics-api/openapi.json`.
+///
+/// `version` is the **API contract** version (stable) — deliberately NOT
+/// `CARGO_PKG_VERSION` — so the drift-check gate (`scripts/ci/openapi_spec.py
+/// check`) fires only on real route/schema changes, not on every release bump.
+fn openapi_info() -> OpenApiInfo {
+    OpenApiInfo {
+        title: "Analytics API".to_owned(),
+        version: "1.0.0".to_owned(),
+        description: Some(
+            "Read-only query service over predefined ClickHouse metrics. Admins \
+             define metrics (named SQL queries) in MariaDB; the frontend queries \
+             them by UUID with OData-style filtering. The API Gateway mounts this \
+             service at /api/analytics."
+                .to_owned(),
+        ),
+        servers: Vec::new(),
+    }
+}
+
 /// Build the Axum router with all routes.
 ///
 /// Routes are declared through the toolkit's [`OperationBuilder`] rather than
@@ -78,8 +99,8 @@ pub fn router(state: AppState) -> Router {
     let state = Arc::new(state);
 
     // In-process OpenAPI registry. Required by `OperationBuilder::register`;
-    // not yet exposed over HTTP (follow-up: serve `build_openapi(..)` at
-    // `/openapi.json`).
+    // each route below records its spec here. Served at `/openapi.json` at the
+    // end of this function (see the `build_openapi` call near the merge).
     let openapi = OpenApiRegistryImpl::new();
 
     let mut router: Router<Arc<AppState>> = Router::new();
@@ -330,5 +351,31 @@ pub fn router(state: AppState) -> Router {
         .handler(handlers::health)
         .register(Router::new(), &openapi);
 
-    api.merge(health).with_state(state)
+    // Serve the in-process OpenAPI document at `/openapi.json` — the follow-up
+    // promised in the registry comment above. Built ONCE here from every
+    // operation registered into `openapi` (the tenant-scoped routes + /health),
+    // then cloned per request. Public + merged after the tenant middleware, same
+    // rationale as /health: docs tooling and the e2e endpoint-coverage gate fetch
+    // the contract without an `X-Insight-Tenant-Id` header. The committed copy at
+    // `docs/components/backend/analytics-api/openapi.json` is regenerated from
+    // this route by `scripts/ci/openapi_spec.py` (a CI gate fails on drift).
+    // `build_openapi` can only fail on a malformed `OperationSpec` (a code bug,
+    // caught by the spec-drift CI gate). The workspace denies expect()/unwrap()
+    // and `router()` stays infallible, so on that error we log and omit the route
+    // rather than panic or thread a `Result` through `router()` + its caller.
+    let openapi_doc = match openapi.build_openapi(&openapi_info()) {
+        Ok(spec) => Router::new().route(
+            "/openapi.json",
+            get(move || {
+                let spec = spec.clone();
+                async move { Json(spec) }
+            }),
+        ),
+        Err(e) => {
+            tracing::error!("analytics-api: OpenAPI document failed to build: {e}");
+            Router::new()
+        }
+    };
+
+    api.merge(health).merge(openapi_doc).with_state(state)
 }
