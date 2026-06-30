@@ -993,27 +993,51 @@ SQL
 fi
 
 # bronze_cursor — needed by ic-kpis-honest-nulls, team-member-honest-nulls,
-# bullet-views-honest-nulls. The Cursor Airbyte connector overwrites this on
-# first sync (full schema in src/ingestion/connectors/ai/cursor/connector.yaml).
+# bullet-views-honest-nulls, AND the cursor__ai_dev_usage dbt model. Full schema
+# mirrors src/ingestion/connectors/ai/cursor/connector.yaml (stream
+# cursor_daily_usage InlineSchemaLoader). Previously this placeholder carried
+# only a 14-column subset on the assumption that Airbyte overwrites it on first
+# sync — but the e2e rig (and any pre-sync env) has no Airbyte, so the dbt model
+# (reads userId/date/tenant_id/source_id/unique_key/…) could not build. Keep this
+# in lockstep with the connector's InlineSchemaLoader. `date` is epoch-millis.
 if ! ch_table_exists bronze_cursor cursor_daily_usage; then
   echo "  Creating placeholder: bronze_cursor.cursor_daily_usage"
   run_ch <<'SQL'
 CREATE TABLE IF NOT EXISTS bronze_cursor.cursor_daily_usage (
-    email                 String,
-    day                   String,
-    isActive              Nullable(UInt8),
-    totalLinesAdded       Nullable(Float64),
-    acceptedLinesAdded    Nullable(Float64),
-    totalTabsShown        Nullable(Float64),
-    totalTabsAccepted     Nullable(Float64),
-    agentRequests         Nullable(Float64),
-    chatRequests          Nullable(Float64),
-    composerRequests      Nullable(Float64),
+    tenant_id                String,
+    source_id                String,
+    unique_key               String,
+    userId                   Nullable(String),
+    email                    String,
+    day                      Nullable(String),
+    date                     Nullable(Float64),
+    isActive                 Nullable(UInt8),
+    chatRequests             Nullable(Float64),
+    cmdkUsages               Nullable(Float64),
+    composerRequests         Nullable(Float64),
+    agentRequests            Nullable(Float64),
+    bugbotUsages             Nullable(Float64),
+    totalTabsShown           Nullable(Float64),
+    totalTabsAccepted        Nullable(Float64),
+    totalAccepts             Nullable(Float64),
+    totalApplies             Nullable(Float64),
+    totalRejects             Nullable(Float64),
+    totalLinesAdded          Nullable(Float64),
+    totalLinesDeleted        Nullable(Float64),
+    acceptedLinesAdded       Nullable(Float64),
+    acceptedLinesDeleted     Nullable(Float64),
+    mostUsedModel            Nullable(String),
+    tabMostUsedExtension     Nullable(String),
+    applyMostUsedExtension   Nullable(String),
+    clientVersion            Nullable(String),
+    subscriptionIncludedReqs Nullable(Float64),
+    usageBasedReqs           Nullable(Float64),
+    apiKeyReqs               Nullable(Float64),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',
     _airbyte_generation_id UInt32        DEFAULT 0
-) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY (email, day);
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
 SQL
 fi
 
