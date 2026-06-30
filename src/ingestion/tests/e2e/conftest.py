@@ -150,6 +150,27 @@ _SESSION_START_TRUNCATE = [
     # Session-start reset keeps warm re-runs (reused CH volume, no `./e2e.sh
     # down`) from accumulating duplicate keys.
     ("staging", "claude_enterprise__ai_dev_usage"),
+    # Wiki: class_wiki_pages / class_wiki_engagement are incremental
+    # (delete+insert, `_version > max`) and union BOTH outline + confluence. A
+    # warm re-run with the same seed _version produces no new rows, leaving the
+    # prior test's data in place → cross-test contamination. Reset at session
+    # start (max(_version) over the emptied table = 0, so the first test's real
+    # millis _version reloads fully). CI starts fresh anyway.
+    ("silver", "class_wiki_pages"),
+    ("silver", "class_wiki_engagement"),
+    ("silver", "class_wiki_activity"),
+    # ai_smoke (cursor) builds staging.cursor__ai_dev_usage — an incremental
+    # `append` model guarded by a dbt `unique` test on unique_key. Without a
+    # session-start reset, a warm re-run (reused CH volume, no `./e2e.sh down`)
+    # appends the same rows again → duplicate unique_keys → the unique test fails.
+    ("staging", "cursor__ai_dev_usage"),
+    # chatgpt_team specs build staging.chatgpt_team__ai_dev_usage (codex) and
+    # staging.chatgpt_team__ai_assistant_usage (chat) — both incremental `append`
+    # models with a dbt `unique` test on unique_key. Session-start reset keeps
+    # warm re-runs (reused CH volume, no `./e2e.sh down`) from accumulating
+    # duplicate keys.
+    ("staging", "chatgpt_team__ai_dev_usage"),
+    ("staging", "chatgpt_team__ai_assistant_usage"),
 ]
 
 

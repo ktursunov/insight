@@ -61,6 +61,9 @@ CREATE DATABASE IF NOT EXISTS bronze_bitbucket_cloud;
 CREATE DATABASE IF NOT EXISTS bronze_zulip_proxy;
 CREATE DATABASE IF NOT EXISTS bronze_claude_team;
 CREATE DATABASE IF NOT EXISTS bronze_claude_enterprise;
+CREATE DATABASE IF NOT EXISTS bronze_outline;
+CREATE DATABASE IF NOT EXISTS bronze_confluence;
+CREATE DATABASE IF NOT EXISTS bronze_chatgpt_team;
 SQL
 
 # ---------------------------------------------------------------------------
@@ -774,6 +777,11 @@ if ! ch_table_exists bronze_jira jira_user; then
 CREATE TABLE IF NOT EXISTS bronze_jira.jira_user (
     unique_key String,
     source_id String,
+    -- tenant_id is read by confluence__wiki_pages' jira_user join (account_id →
+    -- email identity resolution). The real Airbyte stream carries it; the
+    -- placeholder omitted it, which broke that model's compile on a fresh
+    -- cluster. Nullable so connectors that seed jira_user without it still load.
+    tenant_id Nullable(String),
     account_id String,
     email Nullable(String),
     display_name Nullable(String),
@@ -784,6 +792,15 @@ CREATE TABLE IF NOT EXISTS bronze_jira.jira_user (
     _airbyte_meta          String        DEFAULT '{}',
     _airbyte_generation_id UInt32        DEFAULT 0
 ) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+else
+  # Reconcile a pre-existing jira_user (warm cluster, or one already created by
+  # the Jira connector before this column was added): the create branch above is
+  # skipped, so add tenant_id in place. confluence__wiki_pages' jira_user join
+  # reads it and fails to compile otherwise. Idempotent (ADD COLUMN IF NOT EXISTS).
+  echo "  Reconciling placeholder schema: bronze_jira.jira_user (tenant_id)"
+  run_ch <<'SQL'
+ALTER TABLE bronze_jira.jira_user ADD COLUMN IF NOT EXISTS tenant_id Nullable(String);
 SQL
 fi
 
@@ -1025,27 +1042,51 @@ SQL
 fi
 
 # bronze_cursor — needed by ic-kpis-honest-nulls, team-member-honest-nulls,
-# bullet-views-honest-nulls. The Cursor Airbyte connector overwrites this on
-# first sync (full schema in src/ingestion/connectors/ai/cursor/connector.yaml).
+# bullet-views-honest-nulls, AND the cursor__ai_dev_usage dbt model. Full schema
+# mirrors src/ingestion/connectors/ai/cursor/connector.yaml (stream
+# cursor_daily_usage InlineSchemaLoader). Previously this placeholder carried
+# only a 14-column subset on the assumption that Airbyte overwrites it on first
+# sync — but the e2e rig (and any pre-sync env) has no Airbyte, so the dbt model
+# (reads userId/date/tenant_id/source_id/unique_key/…) could not build. Keep this
+# in lockstep with the connector's InlineSchemaLoader. `date` is epoch-millis.
 if ! ch_table_exists bronze_cursor cursor_daily_usage; then
   echo "  Creating placeholder: bronze_cursor.cursor_daily_usage"
   run_ch <<'SQL'
 CREATE TABLE IF NOT EXISTS bronze_cursor.cursor_daily_usage (
-    email                 String,
-    day                   String,
-    isActive              Nullable(UInt8),
-    totalLinesAdded       Nullable(Float64),
-    acceptedLinesAdded    Nullable(Float64),
-    totalTabsShown        Nullable(Float64),
-    totalTabsAccepted     Nullable(Float64),
-    agentRequests         Nullable(Float64),
-    chatRequests          Nullable(Float64),
-    composerRequests      Nullable(Float64),
+    tenant_id                String,
+    source_id                String,
+    unique_key               String,
+    userId                   Nullable(String),
+    email                    String,
+    day                      Nullable(String),
+    date                     Nullable(Float64),
+    isActive                 Nullable(UInt8),
+    chatRequests             Nullable(Float64),
+    cmdkUsages               Nullable(Float64),
+    composerRequests         Nullable(Float64),
+    agentRequests            Nullable(Float64),
+    bugbotUsages             Nullable(Float64),
+    totalTabsShown           Nullable(Float64),
+    totalTabsAccepted        Nullable(Float64),
+    totalAccepts             Nullable(Float64),
+    totalApplies             Nullable(Float64),
+    totalRejects             Nullable(Float64),
+    totalLinesAdded          Nullable(Float64),
+    totalLinesDeleted        Nullable(Float64),
+    acceptedLinesAdded       Nullable(Float64),
+    acceptedLinesDeleted     Nullable(Float64),
+    mostUsedModel            Nullable(String),
+    tabMostUsedExtension     Nullable(String),
+    applyMostUsedExtension   Nullable(String),
+    clientVersion            Nullable(String),
+    subscriptionIncludedReqs Nullable(Float64),
+    usageBasedReqs           Nullable(Float64),
+    apiKeyReqs               Nullable(Float64),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',
     _airbyte_generation_id UInt32        DEFAULT 0
-) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY (email, day);
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
 SQL
 fi
 
@@ -1315,6 +1356,290 @@ CREATE TABLE IF NOT EXISTS bronze_claude_enterprise.claude_enterprise_users (
     cowork_metrics_json          Nullable(String),
     collected_at                 Nullable(String),
     data_source                  Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_chatgpt_team.chatgpt_team_codex_user_daily — per-user/day Codex usage
+# pulled via the chatgpt-team-proxy from chatgpt.com's usage-leaderboard.
+# chatgpt_team__ai_dev_usage reads email/date/n_threads/lines_added/credits/etc.
+# Identity columns are non-null `string` in the connector catalog → String here.
+if ! ch_table_exists bronze_chatgpt_team chatgpt_team_codex_user_daily; then
+  echo "  Creating placeholder: bronze_chatgpt_team.chatgpt_team_codex_user_daily"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_chatgpt_team.chatgpt_team_codex_user_daily (
+    tenant_id              String,
+    source_id              String,
+    unique_key             String,
+    collected_at           String,
+    data_source            String,
+    date                   String,
+    email                  String,
+    user_id                Nullable(String),
+    name                   Nullable(String),
+    credits                Nullable(Float64),
+    n_threads              Nullable(Float64),
+    n_turns                Nullable(Float64),
+    current_streak         Nullable(Float64),
+    text_tokens            Nullable(Float64),
+    lines_added            Nullable(Float64),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_pages — Outline document snapshot (author/version/space). Feeds outline__wiki_pages → class_wiki_pages.
+if ! ch_table_exists bronze_outline wiki_pages; then
+  echo "  Creating placeholder: bronze_outline.wiki_pages"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_pages (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    space_id                 Nullable(String),
+    title                    Nullable(String),
+    status                   Nullable(String),
+    author_id                Nullable(String),
+    author_email             Nullable(String),
+    last_editor_id           Nullable(String),
+    last_editor_email        Nullable(String),
+    parent_page_id           Nullable(String),
+    version_number           Nullable(Int64),
+    created_at               Nullable(String),
+    updated_at               Nullable(String),
+    collected_at             Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_spaces — collection metadata (LEFT JOIN in outline__wiki_pages).
+if ! ch_table_exists bronze_outline wiki_spaces; then
+  echo "  Creating placeholder: bronze_outline.wiki_spaces"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_spaces (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    space_id                 Nullable(String),
+    name                     Nullable(String),
+    url                      Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_users — user directory (LEFT JOIN for author_email in outline__wiki_pages).
+if ! ch_table_exists bronze_outline wiki_users; then
+  echo "  Creating placeholder: bronze_outline.wiki_users"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_users (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    user_id                  Nullable(String),
+    email                    Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_outline.wiki_comments — page comments. Feeds outline__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_outline wiki_comments; then
+  echo "  Creating placeholder: bronze_outline.wiki_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_outline.wiki_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    parent_comment_id        Nullable(String),
+    anchor_text              Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_pages — page snapshot (author/version/space). Feeds confluence__wiki_pages → class_wiki_pages.
+if ! ch_table_exists bronze_confluence wiki_pages; then
+  echo "  Creating placeholder: bronze_confluence.wiki_pages"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_pages (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    space_id                 Nullable(String),
+    title                    Nullable(String),
+    status                   Nullable(String),
+    author_id                Nullable(String),
+    last_editor_id           Nullable(String),
+    parent_page_id           Nullable(String),
+    version_number           Nullable(Int64),
+    created_at               Nullable(String),
+    updated_at               Nullable(String),
+    collected_at             Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_spaces — space metadata (LEFT JOIN in confluence__wiki_pages).
+if ! ch_table_exists bronze_confluence wiki_spaces; then
+  echo "  Creating placeholder: bronze_confluence.wiki_spaces"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_spaces (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    space_id                 Nullable(String),
+    name                     Nullable(String),
+    url                      Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_footer_comments — footer top-level comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_footer_comments; then
+  echo "  Creating placeholder: bronze_confluence.wiki_footer_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_footer_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_footer_comment_replies — footer replies comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_footer_comment_replies; then
+  echo "  Creating placeholder: bronze_confluence.wiki_footer_comment_replies"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_footer_comment_replies (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_inline_comments — inline top-level comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_inline_comments; then
+  echo "  Creating placeholder: bronze_confluence.wiki_inline_comments"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_inline_comments (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_confluence.wiki_inline_comment_replies — inline replies comments. Feeds confluence__wiki_engagement → class_wiki_engagement.
+if ! ch_table_exists bronze_confluence wiki_inline_comment_replies; then
+  echo "  Creating placeholder: bronze_confluence.wiki_inline_comment_replies"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_inline_comment_replies (
+    unique_key               String,
+    tenant_id                Nullable(String),
+    source_id                Nullable(String),
+    page_id                  Nullable(String),
+    comment_id               Nullable(String),
+    parent_comment_id        Nullable(String),
+    author_id                Nullable(String),
+    created_at               Nullable(String),
+    resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_chatgpt_team.chatgpt_team_chat_activity — per-user/day chat usage pulled
+# via the chatgpt-team-proxy from chatgpt.com's analytics user_list endpoint.
+# chatgpt_team__ai_assistant_usage reads email/date/messages/*_messages/etc.
+if ! ch_table_exists bronze_chatgpt_team chatgpt_team_chat_activity; then
+  echo "  Creating placeholder: bronze_chatgpt_team.chatgpt_team_chat_activity"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_chatgpt_team.chatgpt_team_chat_activity (
+    tenant_id              String,
+    source_id              String,
+    unique_key             String,
+    collected_at           String,
+    data_source            String,
+    date                   String,
+    email                  String,
+    name                   Nullable(String),
+    seat_type              Nullable(String),
+    messages               Nullable(Float64),
+    gpt_messages           Nullable(Float64),
+    tool_messages          Nullable(Float64),
+    connector_messages     Nullable(Float64),
+    project_messages       Nullable(Float64),
+    credits_used           Nullable(Float64),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',
