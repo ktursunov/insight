@@ -227,8 +227,14 @@ CREATE TABLE IF NOT EXISTS silver.class_ai_dev_usage (
 ) ENGINE = ReplacingMergeTree(_version) ORDER BY (email, day) COMMENT 'INSIGHT_PLACEHOLDER_v1';
 SQL
 else
-  echo "  Reconciling placeholder schema: silver.class_ai_dev_usage"
-  run_ch <<'SQL'
+  class_ai_dev_usage_placeholder_count="$(
+    printf "SELECT count() FROM system.tables WHERE database='silver' AND name='class_ai_dev_usage' AND comment='INSIGHT_PLACEHOLDER_v1'" |
+      _ch_http_query |
+      tr -d '[:space:]'
+  )"
+  if [[ "$class_ai_dev_usage_placeholder_count" == "1" ]]; then
+    echo "  Reconciling placeholder schema: silver.class_ai_dev_usage"
+    run_ch <<'SQL'
 ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS source_id String;
 ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS unique_key String;
 ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS api_key_id Nullable(String);
@@ -241,6 +247,9 @@ ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS source String;
 ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS data_source String;
 ALTER TABLE silver.class_ai_dev_usage ADD COLUMN IF NOT EXISTS collected_at Nullable(DateTime64(3));
 SQL
+  else
+    echo "  Skipping placeholder schema reconciliation: silver.class_ai_dev_usage is not a placeholder"
+  fi
 fi
 
 # silver.class_ai_overage — per-seat AI spend-vs-limit (Claude Team). Referenced
