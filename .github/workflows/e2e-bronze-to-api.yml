@@ -144,7 +144,7 @@ jobs:
           path: coverage-inputs
       - name: Check committed spec vs live router
         run: |
-          python3 scripts/ci/openapi_spec.py check \
+          scripts/ci/openapi_spec.sh check \
             --live-file coverage-inputs/openapi.live.json | tee openapi_drift.txt
           rc=${PIPESTATUS[0]}
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then { echo '```'; cat openapi_drift.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi

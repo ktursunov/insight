@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Generate / drift-check the committed analytics-api OpenAPI spec.
+"""Generate the committed analytics-api OpenAPI spec, and canonicalize a spec file.
 
 The live contract is the in-process registry served at ``GET /openapi.json``
-(``src/backend/services/analytics-api/src/api/mod.rs``). This is the whole gate —
-one script, no shell wrapper:
+(``src/backend/services/analytics-api/src/api/mod.rs``). This script owns the two
+Python-side jobs; the drift-check GATE lives in the sibling ``openapi_spec.sh``,
+which calls ``normalize`` here and diffs:
 
-    python3 scripts/ci/openapi_spec.py check     # exit 2 + diff if the doc drifted
-    python3 scripts/ci/openapi_spec.py update     # rewrite the committed doc
+    python3 scripts/ci/openapi_spec.py update           # rewrite the committed doc from the live spec
+    python3 scripts/ci/openapi_spec.py normalize <file>  # print the canonical form of a spec file (used by the gate)
 
-Live-spec source, in precedence order:
+Live-spec source for ``update`` (precedence order):
   --url / $ANALYTICS_API_URL   fetch a running analytics-api (needs httpx)
   --live-file <path>           a saved GET /openapi.json
   (default)                    the openapi.live.json the e2e run collects into
@@ -23,7 +24,6 @@ it runs from any working directory.
 from __future__ import annotations
 
 import argparse
-import difflib
 import json
 import os
 import sys
@@ -41,9 +41,9 @@ SPEC_ROUTE = "/openapi.json"
 def normalize(doc: object) -> str:
     """Canonical on-disk form: sorted keys, 2-space indent, trailing newline.
 
-    Sorting keys makes the comparison independent of the registry's emission
-    order (the toolkit iterates a ``DashMap``), so ``check`` is stable run-to-run
-    and ``update`` produces a minimal, review-friendly diff.
+    Sorting keys makes the form independent of the registry's emission order (the
+    toolkit iterates a ``DashMap``), so ``update`` produces a minimal, review-
+    friendly diff and the ``openapi_spec.sh`` gate compares stably run-to-run.
     """
     return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
@@ -62,9 +62,9 @@ def fetch_live_spec(base_url: str, tenant_id: str | None) -> object:
         return r.json()
 
 
-def _load_live(args: argparse.Namespace) -> tuple[str | None, str | None]:
-    """Return (normalized live spec, human-readable source), or (None, None) on a
-    missing file (after printing an error)."""
+def _load_live(args: argparse.Namespace) -> tuple[str, str] | None:
+    """Return (normalized live spec, human-readable source), or None on a missing
+    file (after printing an error)."""
     url = args.url or os.environ.get("ANALYTICS_API_URL")
     if url:
         tenant = args.tenant or os.environ.get("ANALYTICS_TENANT_ID")
@@ -76,73 +76,60 @@ def _load_live(args: argparse.Namespace) -> tuple[str | None, str | None]:
             f"the live spec), or pass --url / $ANALYTICS_API_URL to fetch a running API",
             file=sys.stderr,
         )
-        return None, None
+        return None
     return normalize(json.loads(live_path.read_text(encoding="utf-8"))), str(live_path)
+
+
+def _cmd_update(args: argparse.Namespace) -> int:
+    loaded = _load_live(args)
+    if loaded is None:
+        return 2
+    live, source = loaded
+    path = Path(args.file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(live, encoding="utf-8")
+    print(f"wrote {path} ({len(live.splitlines())} lines) from {source}")
+    return 0
+
+
+def _cmd_normalize(args: argparse.Namespace) -> int:
+    path = Path(args.file)
+    if not path.exists():
+        print(f"ERROR: {path} not found", file=sys.stderr)
+        return 2
+    sys.stdout.write(normalize(json.loads(path.read_text(encoding="utf-8"))))
+    return 0
 
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Generate / drift-check the analytics-api OpenAPI spec."
+        description="Generate / canonicalize the analytics-api OpenAPI spec "
+        "(the drift-check gate is scripts/ci/openapi_spec.sh)."
     )
-    p.add_argument(
-        "mode",
-        choices=["check", "update"],
-        help="check: exit 2 on drift; update: rewrite the committed doc",
-    )
-    p.add_argument("--url", help="fetch a running analytics-api (default: $ANALYTICS_API_URL)")
-    p.add_argument(
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    up = sub.add_parser("update", help="rewrite the committed doc from the live spec")
+    up.add_argument("--url", help="fetch a running analytics-api (default: $ANALYTICS_API_URL)")
+    up.add_argument(
         "--live-file",
         default=str(DEFAULT_LIVE_FILE),
         help="saved GET /openapi.json to read when not fetching "
         "(default: the e2e-collected artifact)",
     )
-    p.add_argument("--file", default=str(DEFAULT_SPEC_FILE), help="committed spec path")
-    p.add_argument(
+    up.add_argument("--file", default=str(DEFAULT_SPEC_FILE), help="committed spec path")
+    up.add_argument(
         "--tenant",
         help="X-Insight-Tenant-Id header (default: $ANALYTICS_TENANT_ID; "
         "optional — the route is public)",
     )
+    up.set_defaults(func=_cmd_update)
+
+    nm = sub.add_parser("normalize", help="print the canonical form of a spec file to stdout")
+    nm.add_argument("file", help="path to a JSON OpenAPI document")
+    nm.set_defaults(func=_cmd_normalize)
+
     args = p.parse_args()
-
-    live, source = _load_live(args)
-    if live is None:
-        return 2
-    path = Path(args.file)
-
-    if args.mode == "update":
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(live, encoding="utf-8")
-        print(f"wrote {path} ({len(live.splitlines())} lines) from {source}")
-        return 0
-
-    # check
-    if not path.exists():
-        print(
-            f"ERROR: {path} does not exist — run "
-            f"`python3 scripts/ci/openapi_spec.py update` to create it",
-            file=sys.stderr,
-        )
-        return 2
-    committed = path.read_text(encoding="utf-8")
-    if committed == live:
-        print(f"OK: {path} matches the live spec ({source})")
-        return 0
-
-    sys.stdout.writelines(
-        difflib.unified_diff(
-            committed.splitlines(keepends=True),
-            live.splitlines(keepends=True),
-            fromfile=f"{path} (committed)",
-            tofile=f"{source} (live)",
-        )
-    )
-    print(
-        f"\nERROR: {path} is STALE vs the live analytics-api router.\n"
-        f"Regenerate it:  ./e2e.sh test && python3 scripts/ci/openapi_spec.py update\n"
-        f"(then commit the updated {path})",
-        file=sys.stderr,
-    )
-    return 2
+    return args.func(args)
 
 
 if __name__ == "__main__":

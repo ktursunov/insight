@@ -89,7 +89,7 @@ case "$cmd" in
         run=(docker compose "${COMPOSE_FILES[@]}" run --rm --no-deps -T runner)
         rc=0
         echo "── openapi spec drift (gate) ──"
-        "${run[@]}" python3 /workspace/scripts/ci/openapi_spec.py check --live-file .artifacts/openapi.live.json --file "$spec" || rc=1
+        "${run[@]}" /workspace/scripts/ci/openapi_spec.sh check --live-file .artifacts/openapi.live.json --file "$spec" || rc=1
         echo "── api endpoint coverage (observability — non-blocking) ──"
         "${run[@]}" python3 lib/api_coverage.py --observed .artifacts/observed_endpoints.json --spec "$spec" || true
         exit "$rc"
