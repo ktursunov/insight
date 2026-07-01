@@ -11,29 +11,94 @@ name: E2E — Bronze to API
 # Code:  src/ingestion/tests/e2e/
 
 on:
-  # PR-only — same reasoning as ci.yml: branch protection gates
-  # merge on PR success, and re-running the full bronze→API stack
-  # (clickhouse + mariadb + dbt + pytest) on the merge commit just burns
-  # ~30 minutes for an outcome we already proved. workflow_dispatch
-  # remains for manual reruns against main.
+  # PR-only (+ manual dispatch). Same reasoning as ci.yml: branch protection
+  # gates merge on PR success, and re-running the full bronze→API stack on the
+  # merge commit just burns ~30 minutes for an outcome we already proved.
   #
-  # Deliberately NO `paths:` filter: this check is meant to be a required
-  # status check on main, and a path-filtered required check never reports
-  # on PRs outside the filter — they hang on "Expected" forever. Running on
-  # every PR keeps the gate uniform; the serial suite costs ~4 min with a
-  # warm cargo cache.
+  # NB: intentionally NO workflow-level `paths:` filter. This check is a
+  # required status check on main, and a workflow skipped by a path filter
+  # leaves that required check stuck on "Expected — Waiting for status"
+  # forever, blocking the PR. So the workflow always triggers and relevance is
+  # decided *inside* it: the `changes` job diffs the PR against main and only
+  # fans out the ~30-min suite when a path the suite actually consumes changed.
+  # Docs-only / non-product PRs skip the suite but still get a green `E2E gate`
+  # (make THAT job the required check — see the e2e-gate job below).
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# A new push obsoletes any run still in flight for the same ref — cancel it so a
+# rebase/force-push doesn't leave a slow suite burning minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # NB: forbids developers from running `pytest --update-snapshots` in CI.
   # The guard lives in src/ingestion/tests/e2e/metrics/test_fixtures.py.
   CI: "true"
 
+permissions:
+  contents: read
+
 jobs:
+  # Decide whether this PR touches anything the bronze→API suite consumes.
+  # Cheap (~seconds): checkout + a single git diff against main. Runs on every
+  # PR so the required `E2E gate` always has an upstream result to report.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch base branch
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - id: detect
+        run: |
+          set -euo pipefail
+
+          # A manual dispatch is an explicit "run it" against main — there's no
+          # PR diff to consult, so always run the suite.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "manual dispatch → run"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Paths whose *contents* the suite reads at build- or test-time
+          # (see src/ingestion/tests/e2e/lib/config.py + compose/):
+          #   src/backend/**   — analytics-api: compiled into the runner image
+          #                      (compose/docker-compose.runner.yml) + its dbt
+          #                      manifest dir (analytics_api_manifest_dir).
+          #   src/ingestion/** — dbt project (src/ingestion/dbt), CH/Maria
+          #                      migrations (src/ingestion/scripts/migrations),
+          #                      connectors' enrich binaries, silver defs, AND
+          #                      the e2e harness + fixtures (tests/e2e) itself.
+          # Plus this workflow file. Deliberately NOT triggers: src/frontend/**
+          # (the suite stops at the analytics-api HTTP layer) and deploy/**
+          # (the rig ships its own compose/seed under tests/e2e and never reads
+          # deploy/). Widen this regex if the suite starts consuming new paths.
+          patterns='^(src/backend/|src/ingestion/|\.github/workflows/e2e-bronze-to-api\.yml$)'
+
+          changed=$(git diff --name-only origin/main...HEAD)
+          echo "changed files:"
+          echo "$changed"
+
+          if echo "$changed" | grep -qE "$patterns"; then
+            echo "relevant change → run"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no product/suite paths touched → skip"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   e2e:
     name: Run E2E suite
+    needs: changes
+    if: ${{ needs.changes.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -82,3 +147,30 @@ jobs:
       - name: Tear down
         if: always()
         run: ./e2e.sh down || true
+
+  # Single stable required check. Always runs to completion (never skipped), so
+  # it always reports — no "Expected" hang. Green when the suite passed OR was
+  # legitimately skipped (no product/suite paths touched); red only when change
+  # detection failed or the suite actually ran and failed. Make THIS the
+  # required status check in branch protection (not "Run E2E suite", which is
+  # conditionally skipped and would hang docs-only PRs).
+  e2e-gate:
+    name: E2E gate
+    needs: [changes, e2e]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate suite result
+        run: |
+          echo "changes=${{ needs.changes.result }} e2e=${{ needs.e2e.result }}"
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::change detection failed — refusing to pass the gate."
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" = "failure" ]; then
+            echo "::error::E2E suite failed."
+            exit 1
+          fi
+          # e2e.result is 'success' (ran + passed) or 'skipped' (no relevant
+          # changes) — either way the gate is green.
+          echo "E2E gate green (suite: ${{ needs.e2e.result }})"
