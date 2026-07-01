@@ -63,8 +63,9 @@ e2e/
 │   ├── migration_applier.py    # applies src/ingestion/scripts/migrations/*.sql
 │   ├── analytics_api.py        # builds + spawns the analytics-api binary
 │   ├── worker.py               # WorkerContext (resolves pytest-xdist worker id)
+│   ├── metric_coverage.py      # metric-coverage gate logic + inline SKIP_LIST (--universe-file)
 │   ├── api_coverage.py         # endpoint-coverage gate logic + httpx recording hook
-│   ├── collect_openapi_spec.py # script: snapshot live GET /openapi.json → .artifacts/
+│   ├── collect_coverage_artifacts.py  # script: snapshot live spec + catalog → .artifacts/
 │   └── config.py               # session config (ports, random creds)
 ├── seed/
 │   └── metrics.yaml            # optional test-specific metric overrides (default: empty)
@@ -73,25 +74,37 @@ e2e/
     └── test_session_smoke.py
 ```
 
-## API coverage gates
+## Coverage gates
 
-These checks run in the **E2E — Bronze to API** workflow (`.github/workflows/e2e-bronze-to-api.yml`), *not* as pytest tests. The `e2e` job runs the suite and — while analytics-api is up — collects two inputs into `.artifacts/` (uploaded as the `coverage-inputs` artifact); the analysis then reads those files (no Docker, no second app boot):
+Coverage checks run as **separate jobs** in the **E2E — Bronze to API** workflow (`.github/workflows/e2e-bronze-to-api.yml`), *not* as pytest tests. The `e2e` job runs the suite and — while analytics-api is up — collects three inputs into `.artifacts/` (uploaded as the `coverage-inputs` artifact); the gate jobs then analyse those files (no Docker, no second app boot):
 
-- **openapi-spec-drift-gate** (blocking CI job) — the committed `docs/components/backend/analytics-api/openapi.json` matches the live router (`GET /openapi.json` → `openapi.live.json`). The committed doc is the contract docs tooling and the endpoint gate read, so it must not rot; regenerate it with `python3 scripts/ci/openapi_spec.py update` and commit.
-- **endpoint coverage** (observability, **non-blocking**) — the suite records which routes it exercises (the httpx response hook in `AnalyticsApiProcess.client()` → `observed_endpoints.json`). `lib/api_coverage.py` reports, per documented operation, whether the suite hit it and which declared status codes were validated. It is **not** a CI gate: a read-only metric suite touches few routes (most are write/admin), so a pass/fail there would be ~all skip-list. `./e2e.sh gates` prints it as info.
-
-The endpoint coverage universe is the committed OpenAPI spec (kept honest by the drift gate). The verdict per **operation** (`METHOD path`) is binary: **exercised** by the suite → PASS; in the inline `SKIP_LIST` in [`lib/api_coverage.py`](lib/api_coverage.py) → baseline PASS; neither → FAIL. The skip list is kept honest too — a **redundant** entry (now exercised) or a **stale** one (no longer in the spec) both fail.
+- **metric-coverage-gate** (blocking) — every product `metric_key` the catalog exposes (`POST /v1/catalog/get_metrics` → `catalog_metrics.json`) has its value asserted by a test, or a `SKIP_TABLES`/`SKIP_LIST` entry.
+- **openapi-spec-drift-gate** (blocking) — the committed `docs/components/backend/analytics-api/openapi.json` matches the live router (`GET /openapi.json` → `openapi.live.json`).
+- **endpoint coverage** (observability, **non-blocking**) — the suite records which routes it exercises (httpx hook → `observed_endpoints.json`). `lib/api_coverage.py` reports covered-vs-spec, but it is NOT a CI gate: a read-only metric suite touches few routes (most are write/admin), so a pass/fail there would be ~all skip-list. `./e2e.sh gates` prints it as info.
 
 Locally, after a run:
 
 ```bash
-./e2e.sh test     # runs the suite + collects .artifacts/{openapi.live,observed_endpoints}.json
-./e2e.sh gates    # openapi spec-drift gate (blocking) + endpoint coverage report, against .artifacts/
+./e2e.sh test     # runs the suite + collects .artifacts/{catalog_metrics,openapi.live,observed_endpoints}.json
+./e2e.sh gates    # metric + openapi gates (blocking) + endpoint report, against .artifacts/ (in the runner image; no DB)
 python3 scripts/ci/openapi_spec.py update   # regenerate the committed OpenAPI doc from .artifacts/openapi.live.json
-
-# ad hoc against a running analytics-api (no artifact):
-ANALYTICS_API_URL=http://localhost:18081 python3 scripts/ci/openapi_spec.py check
 ```
+
+The verdict per **metric_key** (each individual number) is **binary**:
+
+- **value-tested** — a `metrics/*.test.yaml` asserts it (`find: {metric_key: …}` paired with `equal`/`assert`) → **PASS**
+- **skip-listed** (in the inline `SKIP_LIST` in [`lib/metric_coverage.py`](lib/metric_coverage.py)) → **PASS** (baseline)
+- **neither** → **FAIL** — a number nobody validates must get an assertion or a `SKIP_LIST` entry.
+
+Catalog keys are dotted (`collab_bullet_rows.m365_emails_sent`); a test asserts the bare response key (`m365_emails_sent`). The column suffix is unique across the catalog, so the gate maps bare→dotted by suffix (a future collision raises). `SKIP_LIST` is the accepted baseline and single source of truth (no side-car file — just `(metric_key, reason)`). Kept honest: a **stale** entry (key no longer in the catalog), a **redundant** one (now value-tested), or a test asserting a **non-catalog** key (typo / unseeded → matches 0 rows) all fail. PASS iff no FAILs.
+
+```bash
+./e2e.sh gates                          # all three gates against .artifacts/ (after ./e2e.sh test)
+# ad hoc against a running analytics-api (no artifact):
+ANALYTICS_API_URL=http://localhost:18081 python3 lib/metric_coverage.py --md
+```
+
+Coverage is **per metric_key**, so every number on a bullet is validated independently — one tested key of a metric does not cover the rest. Today: **18/96** value-tested; the rest are skip-listed with a reason (`reachable: …` entries are the backlog where fixtures already exist).
 
 ## Ports (loopback only)
 

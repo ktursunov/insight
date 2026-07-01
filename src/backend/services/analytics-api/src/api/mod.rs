@@ -57,7 +57,7 @@ pub struct AppState {
 /// committed `docs/components/backend/analytics-api/openapi.json`.
 ///
 /// `version` is the **API contract** version (stable) — deliberately NOT
-/// `CARGO_PKG_VERSION` — so the drift-check gate (`scripts/ci/openapi_spec.py
+/// `CARGO_PKG_VERSION` — so the drift-check gate (`scripts/ci/openapi_spec.sh
 /// check`) fires only on real route/schema changes, not on every release bump.
 fn openapi_info() -> OpenApiInfo {
     OpenApiInfo {
@@ -358,7 +358,7 @@ pub fn router(state: AppState) -> Router {
     // rationale as /health: docs tooling and the e2e endpoint-coverage gate fetch
     // the contract without an `X-Insight-Tenant-Id` header. The committed copy at
     // `docs/components/backend/analytics-api/openapi.json` is regenerated from
-    // this route by `scripts/ci/openapi_spec.py` (a CI gate fails on drift).
+    // this route by `scripts/ci/openapi_spec.sh` (a CI gate fails on drift).
     // `build_openapi` can only fail on a malformed `OperationSpec` (a code bug,
     // caught by the spec-drift CI gate). The workspace denies expect()/unwrap()
     // and `router()` stays infallible, so on that error we log and omit the route

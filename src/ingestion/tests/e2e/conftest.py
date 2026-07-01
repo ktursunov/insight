@@ -33,7 +33,7 @@ from lib import clickhouse as ch
 from lib import compose, mariadb
 from lib.analytics_api import AnalyticsApiProcess, find_free_port, locate_binary
 from lib.ch_seeder import CHSeeder
-from lib.config import SessionConfig
+from lib.config import SessionConfig, TEST_TENANT_ID
 from lib.dbt_runner import DbtRunner
 from lib.enrich import EnrichRunner
 from lib.fixture_loader import TestYaml, discover_tests, load as load_test
@@ -196,19 +196,19 @@ def dbt_runner(ch_migrations_applied: SessionConfig):
     runner.cleanup()
 
 
-def _collect_openapi_spec(proc: AnalyticsApiProcess) -> None:
-    """Run `lib/collect_openapi_spec.py` (a script — NOT a test) against the live
-    API, primary worker only. Snapshots the live `GET /openapi.json` into
-    `.artifacts/openapi.live.json` so the CI spec-drift gate analyses a file with
-    no second app boot. Best-effort: a failure just means the gate job finds no
-    artifact and fails loudly — never abort the session for it. Must run while the
-    API is up (called from analytics_api teardown, before proc.stop())."""
+def _collect_coverage_artifacts(proc: AnalyticsApiProcess) -> None:
+    """Run `lib/collect_coverage_artifacts.py` (a script — NOT a test) against the
+    live API, primary worker only. Snapshots the metric-catalog + OpenAPI gate
+    inputs into `.artifacts/` so the CI gate jobs analyse files with no second
+    app boot. Best-effort: a failure just means the gate jobs find no artifact and
+    fail loudly — never abort the session for it. Must run while the API is up
+    (called from analytics_api teardown, before proc.stop())."""
     if not _IS_PRIMARY:
         return
     import subprocess
     import sys
 
-    script = Path(__file__).parent / "lib" / "collect_openapi_spec.py"
+    script = Path(__file__).parent / "lib" / "collect_coverage_artifacts.py"
     out_dir = Path(__file__).parent / ".artifacts"
     result = subprocess.run(
         [
@@ -218,12 +218,14 @@ def _collect_openapi_spec(proc: AnalyticsApiProcess) -> None:
             proc.base_url,
             "--out-dir",
             str(out_dir),
+            "--tenant",
+            str(TEST_TENANT_ID),
         ],
         check=False,
     )
     if result.returncode != 0:
         LOG.warning(
-            "openapi-spec collection failed (rc=%d); the spec-drift gate may lack input",
+            "coverage-artifact collection failed (rc=%d); gate jobs may lack inputs",
             result.returncode,
         )
 
@@ -251,11 +253,11 @@ def analytics_api(ch_migrations_applied: SessionConfig):
     proc.start()
     seed_test_metrics(cfg)
     yield proc
-    # Snapshot the live OpenAPI spec while the API is still up (a script, run via
-    # subprocess — see _collect_openapi_spec). Always stop the process afterward,
-    # even if collection raised.
+    # Snapshot the metric-catalog + OpenAPI gate inputs while the API is still up
+    # (a script, run via subprocess — see _collect_coverage_artifacts). Always
+    # stop the process afterward, even if collection raised.
     try:
-        _collect_openapi_spec(proc)
+        _collect_coverage_artifacts(proc)
     finally:
         proc.stop()
 

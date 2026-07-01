@@ -49,7 +49,7 @@ SKIP_LIST: list[tuple[str, str]] = [
     ("GET /v1/persons/{email}", "person lookup — not exercised by e2e"),
     ("GET /v1/columns", "column metadata — not exercised by e2e"),
     ("GET /v1/columns/{table}", "column metadata — not exercised by e2e"),
-    ("POST /v1/catalog/get_metrics", "catalog read — not exercised by the e2e suite"),
+    ("POST /v1/catalog/get_metrics", "catalog read — exercised by the metric-coverage gate, not the suite"),
     ("GET /v1/admin/metric-thresholds", "admin CRUD — not exercised by e2e"),
     ("POST /v1/admin/metric-thresholds", "admin CRUD — not exercised by e2e"),
     ("GET /v1/admin/metric-thresholds/{id}", "admin CRUD — not exercised by e2e"),
