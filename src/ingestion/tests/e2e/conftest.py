@@ -1,24 +1,30 @@
 """Session orchestrator — the central pytest conftest.
 
-Owns the lifecycle of every session-scoped resource:
+SEED-ONCE model. The whole stack is populated ONCE per session from every
+fixture's bronze (namespaced per fixture so it all coexists), then the tests are
+pure assertions against that shared, already-built world:
 
-  pytest_sessionstart:
+  session build (once, `build_world` fixture):
     1. docker compose up (ClickHouse + MariaDB)
-    2. apply ClickHouse migrations
-    3. MariaDB is seeded later by the analytics-api binary's own auto-migrations
-    4. spawn analytics-api on a free loopback port
+    2. bootstrap: ensure DBs + bronze/silver placeholders (`ch_bootstrap`)
+    3. seed EVERY fixture's namespaced bronze in one shot
+    4. dbt build staging (union) -> connector enrich -> dbt build silver (union)
+    5. apply gold-view migrations ONCE (prod order: views bind to real silver)
+    6. refresh refreshable MVs ONCE
+    7. spawn analytics-api + seed metric definitions
 
-  pytest_sessionfinish:
-    teardown in reverse order
+  per test (`test_metric_smoke`):
+    namespace the case's request -> POST /v1/metrics/queries -> evaluate expects.
+    No seeding, no dbt, no migration reapply — the data is already there.
 
-All resources are exposed as session-scoped fixtures so individual tests can
-consume them without touching subprocess code directly.
+This replaces the old per-fixture truncate→seed→build→reapply-migrations→refresh
+loop (which re-created ~40 gold views for every fixture). Isolation comes from
+`lib.namespace`; the guard `meta/test_seed_isolation.py` proves no two fixtures
+collide.
 
-When pytest-xdist is active, pytest_sessionstart runs in each worker — but
-docker-compose containers are shared (same names). The compose lifecycle
-is therefore idempotent: subsequent workers attach to the already-running
-stack. The analytics-api binary spawn happens in the master only (gated on
-PYTEST_XDIST_WORKER) to avoid N processes on N workers.
+The suite is serial (not xdist-safe: the build_world step and the shared
+analytics-api process are single-owner). Compose is idempotent, so a rerun
+against a warm stack re-seeds deterministically (see `_SESSION_START_TRUNCATE`).
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ import pytest
 from pathlib import Path
 
 from lib import clickhouse as ch
-from lib import compose, mariadb
+from lib import compose, mariadb, seed_once
 from lib.analytics_api import AnalyticsApiProcess, find_free_port, locate_binary
 from lib.ch_seeder import CHSeeder
 from lib.config import SessionConfig, TEST_TENANT_ID
@@ -175,25 +181,63 @@ _SESSION_START_TRUNCATE = [
 
 
 @pytest.fixture(scope="session")
-def ch_migrations_applied(compose_stack: SessionConfig) -> SessionConfig:
-    """Apply ClickHouse migrations once at session start, then reset the
-    multi-reader silver/staging tables so warm re-runs are deterministic."""
+def ch_bootstrap(compose_stack: SessionConfig) -> SessionConfig:
+    """Bootstrap ClickHouse once: placeholders + ALL migrations, then reset the
+    multi-reader silver/staging tables for warm-rerun determinism.
+
+    Migrations run BEFORE dbt because `init-identity` creates the `identity` /
+    `person` databases and base tables that the dbt identity models WRITE into.
+    Gold views created here bind to the silver placeholders; `build_world` runs a
+    SINGLE `reapply_migrations` after dbt materialises real silver to realign them
+    (schemas are byte-identical, verified — this only rebinds the view to the new
+    table object). That one realign replaces the old per-fixture reapply (≈40
+    views × every fixture → once per session).
+    """
     cfg = compose_stack
     if _IS_PRIMARY:
-        apply_ch_migrations(cfg)
+        apply_ch_migrations(cfg)  # ensure DBs + placeholders + all *.sql migrations
         for schema, table in _SESSION_START_TRUNCATE:
             ch.execute(cfg, f"TRUNCATE TABLE IF EXISTS `{schema}`.`{table}`")
     return cfg
 
 
 @pytest.fixture(scope="session")
-def dbt_runner(ch_migrations_applied: SessionConfig):
-    """Parse dbt manifest once per session; expose a runner for per-test builds."""
-    cfg = ch_migrations_applied
+def dbt_runner(ch_bootstrap: SessionConfig):
+    """Parse dbt manifest once per session; expose a runner for the world build."""
+    cfg = ch_bootstrap
     runner = DbtRunner(cfg)
     runner.setup()
     yield runner
     runner.cleanup()
+
+
+@pytest.fixture(scope="session")
+def all_fixtures() -> list[TestYaml]:
+    """Load + resolve EVERY discovered `*.test.yaml` once, for the seed-once build.
+    A malformed fixture fails the whole session here (before the stack is used)."""
+    return [load_test(p) for p in discover_tests(_METRICS_ROOT)]
+
+
+@pytest.fixture(scope="session")
+def build_world(
+    ch_bootstrap: SessionConfig,
+    dbt_runner: DbtRunner,
+    enrich_runner: EnrichRunner,
+    ch_seeder: CHSeeder,
+    all_fixtures: list[TestYaml],
+    worker_ctx: WorkerContext,
+) -> SessionConfig:
+    """Seed every fixture's namespaced bronze and build the whole stack ONCE."""
+    cfg = ch_bootstrap
+    if _IS_PRIMARY:
+        seed_once.build_world(
+            seeder=ch_seeder,
+            dbt_runner=dbt_runner,
+            enrich_runner=enrich_runner,
+            fixtures=all_fixtures,
+            worker_ctx=worker_ctx,
+        )
+    return cfg
 
 
 def _collect_metrics(proc: AnalyticsApiProcess) -> None:
@@ -231,8 +275,9 @@ def _collect_metrics(proc: AnalyticsApiProcess) -> None:
 
 
 @pytest.fixture(scope="session")
-def analytics_api(ch_migrations_applied: SessionConfig):
-    """Spawn the analytics-api binary baked into the runner image. Its SeaORM
+def analytics_api(build_world: SessionConfig):
+    """Spawn the analytics-api binary baked into the runner image, AFTER the
+    seed-once world is built (gold views exist, silver is populated). Its SeaORM
     migrations run on startup; we then upsert test-specific metrics from
     seed/metrics.yaml.
 
@@ -242,7 +287,7 @@ def analytics_api(ch_migrations_applied: SessionConfig):
     runner image (see lib.analytics_api.locate_binary); if it isn't there the
     bronze→API tests cannot run, so the only honest result is red.
     """
-    cfg = ch_migrations_applied
+    cfg = build_world
     from lib.analytics_api import ApiSpawnError  # local import to keep top clean
     try:
         binary = locate_binary(cfg)
@@ -263,15 +308,15 @@ def analytics_api(ch_migrations_applied: SessionConfig):
 
 
 @pytest.fixture(scope="session")
-def ch_seeder(ch_migrations_applied: SessionConfig) -> CHSeeder:
-    """Session-scoped seeder so its ledger persists across tests in the same worker."""
-    return CHSeeder(ch_migrations_applied)
+def ch_seeder(ch_bootstrap: SessionConfig) -> CHSeeder:
+    """Session-scoped seeder used by the one-shot world build."""
+    return CHSeeder(ch_bootstrap)
 
 
 @pytest.fixture(scope="session")
-def enrich_runner(ch_migrations_applied: SessionConfig) -> EnrichRunner:
+def enrich_runner(ch_bootstrap: SessionConfig) -> EnrichRunner:
     """Session-scoped: discovers connector enrich steps once; builds each crate lazily."""
-    return EnrichRunner(ch_migrations_applied)
+    return EnrichRunner(ch_bootstrap)
 
 
 # ----------------------------------------------------------------------

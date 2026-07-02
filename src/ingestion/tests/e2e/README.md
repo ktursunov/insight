@@ -10,6 +10,25 @@ ClickHouse migration gold-views  →  analytics-api HTTP (POST /v1/metrics/queri
 Airbyte / Kestra / Argo are NOT exercised — bronze is seeded by direct INSERT of the
 `$ref`-resolved records declared in each `*.test.yaml`.
 
+### Execution model — seed once, assert many
+
+The whole fixture set is materialised **once per session**, then each test is a pure
+assertion against that shared world:
+
+```
+build (once):  seed EVERY fixture's bronze  →  dbt build staging → enrich → dbt build silver
+               →  apply gold-view migrations (prod order)  →  refresh MVs
+per test:      namespace the case's request  →  POST /v1/metrics/queries  →  evaluate expects
+```
+
+To let all fixtures coexist in one ClickHouse, each fixture's identity is rewritten to a
+private namespace (`lib/namespace.py`): the email domain, plus `unique_key` / `id` /
+`source_id` / `department`. That keeps every ReplacingMergeTree ORDER-BY key unique (no
+cross-fixture collapse) and every query scoped to its own data. `meta/test_seed_isolation.py`
+proves the invariant offline by parsing each table's real ORDER BY key from the placeholder
+DDL. Because the build is session-scoped, `-k <name>` still materialises the **whole** world
+(the filter only selects which assertions run), so a single-test run is not faster to seed.
+
 See specs: [PRD](../../../../docs/domain/bronze-to-api-e2e/specs/PRD.md), [DESIGN](../../../../docs/domain/bronze-to-api-e2e/specs/DESIGN.md), [DECOMPOSITION](../../../../docs/domain/bronze-to-api-e2e/specs/DECOMPOSITION.md), [FEATURE yaml-rig](../../../../docs/domain/bronze-to-api-e2e/specs/feature-yaml-rig/FEATURE.md).
 
 ## Prerequisites
@@ -61,6 +80,8 @@ e2e/
 │   ├── clickhouse.py           # CH HTTP client wrapper
 │   ├── mariadb.py              # MariaDB connection helper
 │   ├── migration_applier.py    # applies src/ingestion/scripts/migrations/*.sql
+│   ├── namespace.py            # per-fixture identity namespacing (seed-once isolation)
+│   ├── seed_once.py            # one-shot world builder (seed all → dbt → migrate → refresh)
 │   ├── analytics_api.py        # builds + spawns the analytics-api binary
 │   ├── worker.py               # WorkerContext (resolves pytest-xdist worker id)
 │   ├── metric_coverage.py      # metric-coverage gate: SKIP_TABLES + SKIP_LIST (--universe-file)

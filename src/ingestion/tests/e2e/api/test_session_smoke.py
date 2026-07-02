@@ -34,10 +34,11 @@ def test_mariadb_responds(compose_stack: SessionConfig) -> None:
 
 
 def test_migrations_create_insight_database(
-    ch_migrations_applied: SessionConfig,
+    build_world: SessionConfig,
 ) -> None:
-    """After migrations apply, the `insight` database exists with views."""
-    cfg = ch_migrations_applied
+    """After the seed-once world is built (gold migrations applied post-dbt), the
+    `insight` database exists with views."""
+    cfg = build_world
     dbs = {row[0] for row in ch.query(cfg, "SHOW DATABASES")}
     assert "insight" in dbs, f"insight database missing; have: {dbs}"
     assert "identity" in dbs
