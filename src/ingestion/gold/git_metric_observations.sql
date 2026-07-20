@@ -22,7 +22,7 @@
 -- taxonomy/label changes apply retroactively on the next build).
 --
 -- Materialized as a sorted table: the observation pipeline below (FINAL
--- dedup, joins, ten measure branches) runs once per dbt build — which is
+-- dedup, joins, measure branches) runs once per dbt build — which is
 -- also the only time the silver inputs can have changed — instead of once
 -- per metric query. The ordering key mirrors the runtime's filter shape
 -- (source_key, measure_key, entity_id, metric_date), so single-measure
@@ -34,7 +34,7 @@
 --
 -- Grain per measure:
 --   day-grain sums:  commit_count, code_lines_added, lines_added,
---                    pr_created, pr_merged
+--                    lines_removed, pr_created, pr_merged
 --   day-grain presence: commit_day
 --   event-grain (one row per source event, feeding median metrics):
 --                    commit_change_size (per non-merge commit),
@@ -87,10 +87,15 @@ commits_source AS (
         toDate(date) AS metric_date,
         lines_added,
         lines_removed,
+        concat(toString(source_id), ':', project_key, '/', repo_slug) AS repository_value,
+        if(project_key = '', repo_slug, concat(project_key, '/', repo_slug)) AS repository_label,
         replaceOne(data_source, 'insight_', '') AS source_value,
         {{ git_source_label('source_value') }} AS source_label,
         CAST(
-            [tuple('source', source_value, source_label)]
+            [
+                tuple('repository', repository_value, repository_label),
+                tuple('source', source_value, source_label)
+            ]
             AS Array(Tuple(key String, value String, label Nullable(String)))
         ) AS source_dimensions
     FROM {{ ref('class_git_commits') }} FINAL
@@ -112,10 +117,14 @@ file_changes_source AS (
         file_changes.category AS category,
         {{ git_file_category_label('file_changes.category') }} AS category_label,
         file_changes.lines_added AS lines_added,
+        file_changes.lines_removed AS lines_removed,
+        commits.repository_value AS repository_value,
+        commits.repository_label AS repository_label,
         commits.source_dimensions AS source_dimensions,
         CAST(
             [
                 tuple('category', category, category_label),
+                tuple('repository', repository_value, repository_label),
                 tuple('source', commits.source_value, commits.source_label)
             ] AS Array(Tuple(key String, value String, label Nullable(String)))
         ) AS category_source_dimensions
@@ -130,7 +139,8 @@ file_changes_source AS (
             repo_slug,
             commit_hash,
             {{ git_file_category('file_path') }} AS category,
-            sum(lines_added) AS lines_added
+            sum(lines_added) AS lines_added,
+            sum(lines_removed) AS lines_removed
         FROM {{ ref('class_git_file_changes') }} FINAL
         GROUP BY tenant_id, source_id, project_key, repo_slug, commit_hash, category
     ) AS file_changes
@@ -263,6 +273,10 @@ measure_observations AS (
     UNION ALL
 
     {{ sum_measure('lines_added', 'file_changes_source', 'lines_added', 'category_source_dimensions') }}
+
+    UNION ALL
+
+    {{ sum_measure('lines_removed', 'file_changes_source', 'lines_removed', 'category_source_dimensions') }}
 
     UNION ALL
 
