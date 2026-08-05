@@ -43,7 +43,7 @@ def test_operation_is_refused_without_a_session(
     status-only assertion and still break the product.
 
     Validating rather than spot-checking two keys is what makes that cheap
-    enough to do 45 times — `ProblemDocument` also forbids undeclared fields, so
+    enough to do 49 times — `ProblemDocument` also forbids undeclared fields, so
     an envelope that quietly grows or loses one fails here.
     """
     response = api_client.request(

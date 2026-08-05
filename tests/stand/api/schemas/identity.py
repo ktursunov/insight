@@ -111,16 +111,19 @@ class Profile(BaseModel):
 
 
 class IdentityValue(BaseModel):
-    """`GET /internal/persons/by-email/{email}` — the login-bootstrap lookup.
+    """What both `/internal/persons/*` lookups answer with.
 
-    NOT a `Profile`, though both are "a person looked up by email". This route
-    answers the identity VALUE that matched — the alias row, pointing at what it
-    resolved to — because at login the caller has an email and needs to learn
-    which person it belongs to, not to read that person's attributes. Hence
-    `insight_source_id` rather than `person_id`, and no tenant at all: the
-    tenant is exactly what is still unknown at that point.
+    `by-external-id` (the login-bootstrap resolve, keyed on the IdP's
+    `source_type` plus its source-native external id) and `by-email-override`
+    (the admin view-as resolve) share this shape.
 
-
+    NOT a `Profile`, though both are "a person looked up". These routes answer
+    the identity VALUE that matched — the alias row, pointing at what it
+    resolved to — because at login the caller holds one external identifier and
+    needs to learn which person it belongs to, not to read that person's
+    attributes. Hence `insight_source_id` rather than `person_id`, and no
+    tenant at all: the tenant is exactly what is still unknown at that point,
+    which is why the resolve behind both is tenant-agnostic.
     """
 
     value_type: str

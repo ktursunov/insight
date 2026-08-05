@@ -32,10 +32,6 @@ from insight_stand import analytics_path, identity_path
 # resolved — they only have to be well-formed enough to route.
 SOME_ID: Final[str] = "01900000-0000-7000-8000-000000000000"
 SOME_TABLE: Final[str] = "gold_metric_values"
-#: Still used by identity's `/internal/persons/by-email/{email}`, which is a
-#: LOOKUP by email rather than a person-keyed route and so was untouched by the
-#: identity cutover (#2098).
-SOME_EMAIL: Final[str] = "nobody@example.com"
 
 #: Stand-in -> the parameter it stands in for. These values are synthetic and
 #: chosen for this purpose, so a path segment equal to one of them IS the
@@ -44,7 +40,6 @@ SOME_EMAIL: Final[str] = "nobody@example.com"
 _PARAMETERS: Final[dict[str, str]] = {
     SOME_ID: "{id}",
     SOME_TABLE: "{table}",
-    SOME_EMAIL: "{email}",
 }
 
 
@@ -126,7 +121,7 @@ ANALYTICS_OPERATIONS: Final[tuple[Operation, ...]] = (
     _a("GET", f"/v1/persons/{SOME_ID}"),
 )
 
-#: identity-resolution — 18 operations. `/health` and `/healthz` are the host
+#: identity-resolution — 19 operations. `/health` and `/healthz` are the host
 #: router's, not the product API, and are deliberately absent: the real probes
 #: address the pod directly rather than passing the gateway.
 IDENTITY_OPERATIONS: Final[tuple[Operation, ...]] = (
@@ -149,7 +144,15 @@ IDENTITY_OPERATIONS: Final[tuple[Operation, ...]] = (
     # `.authenticated()`, not admin-gated — and the substring test below does not
     # catch it, which is correct: `/visible-persons` is not `/visibility`.
     _i("POST", "/v1/visible-persons"),
-    _i("GET", f"/internal/persons/by-email/{SOME_EMAIL}"),
+    # The two `/internal/*` routes, which take their arguments as query
+    # parameters rather than path segments — so the url IS the operation and
+    # no stand-in is needed. They replaced the removed
+    # `/internal/persons/by-email/{email}`, and are catalogued separately
+    # because they are separate routes with independent guards: one is the
+    # login-bootstrap resolve, the other the admin view-as override, and a
+    # sweep proving one closed proves nothing about the other.
+    _i("GET", "/internal/persons/by-external-id"),
+    _i("GET", "/internal/persons/by-email-override"),
 )
 
 ALL_OPERATIONS: Final[tuple[Operation, ...]] = ANALYTICS_OPERATIONS + IDENTITY_OPERATIONS

@@ -14,8 +14,9 @@ the gateway answers 401 for paths that do not exist too.
 
 NOT here: `/v1/persons/{email}`. The committed contract at
 `docs/components/backend/identity-resolution/openapi.json` still declares it on
-this service, but identity-resolution answers 404 — only
-`/internal/persons/by-email/{email}` (service principals) survived the port.
+this service, but identity-resolution answers 404 — of the email-keyed lookups
+only `/internal/persons/by-email-override` (service principals) is still
+served, and login resolves by external id instead; see `test_internal.py`.
 The capability itself is not gone: **analytics** serves `/v1/persons/{email}`
 and returns 200, so it belongs in an analytics module when one grows to
 cover it.
