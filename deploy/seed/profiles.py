@@ -409,11 +409,23 @@ def get_login_id_pairs(roster: list[Person]) -> list[tuple[str, str]]:
       DEV_USER_EMAIL). Only that one persona can log in.
     Getting this wrong means the login-bootstrap 403s: the seeded
     `value_type='id'` row would carry a value the id_token never presents.
+
+    Scoped to the roster it is HANDED in both modes, including fakeidp's fixed
+    pair. This is called once per tenant (the demo organisation, then the
+    second tenant's lone caller), and a fakeidp branch that ignored its
+    argument would answer the second call with the DEV LEAD's pair — seeding
+    that person's `(source_type, external_id)` a second time under the other
+    tenant. The login resolve is deliberately tenant-agnostic
+    (`resolve_person_id_by_source_any_tenant`), and the invariant it rests on
+    is that the pair is unique across every tenant sharing the database, so
+    that row would make the dev lead's own login ambiguous.
     """
     mode = os.environ.get("AUTH_MODE", "fakeidp").strip().lower()
     if mode == "keycloak":
         return [(p.uuid, p.uuid) for p in roster]
-    return [(DEV_LEAD_UUID, _FAKEIDP_DEV_LEAD_EXTERNAL_ID)]
+    return [
+        (DEV_LEAD_UUID, _FAKEIDP_DEV_LEAD_EXTERNAL_ID) for p in roster if p.uuid == DEV_LEAD_UUID
+    ]
 
 
 def get_idp_source_type() -> str:

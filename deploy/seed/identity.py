@@ -151,24 +151,30 @@ def seed_login_ids(
     """
     inserted = 0
     for person_uuid, external_id in get_login_id_pairs(list(roster)):
-        cur.execute(exists_sql, (
-            _bin(tenant_uuid),
-            _bin(person_uuid),
-            source_type,
-            _bin(DEV_SEED_SOURCE_ID),
-            external_id,
-        ))
+        cur.execute(
+            exists_sql,
+            (
+                _bin(tenant_uuid),
+                _bin(person_uuid),
+                source_type,
+                _bin(DEV_SEED_SOURCE_ID),
+                external_id,
+            ),
+        )
         if cur.fetchone() is not None:
             continue
-        cur.execute(insert_sql, (
-            source_type,
-            _bin(DEV_SEED_SOURCE_ID),
-            _bin(tenant_uuid),
-            external_id,
-            _bin(person_uuid),
-            _bin(AUTHOR_PERSON_UUID),
-            "seed.py login id",
-        ))
+        cur.execute(
+            insert_sql,
+            (
+                source_type,
+                _bin(DEV_SEED_SOURCE_ID),
+                _bin(tenant_uuid),
+                external_id,
+                _bin(person_uuid),
+                _bin(AUTHOR_PERSON_UUID),
+                "seed.py login id",
+            ),
+        )
         inserted += cur.rowcount
     return inserted
 
@@ -388,7 +394,15 @@ def run() -> None:
         # No org_chart and no person_roles for them: they are a caller, not a
         # subject. An edge would put them in somebody's subtree, and a role
         # would make the refusal ambiguous — is it the tenant or the grant?
+        #
+        # A login-bootstrap row IS written, for the same reason the other two
+        # are withheld: being a caller is the whole of what this persona is,
+        # and a caller who cannot log in cannot be refused for their tenant.
+        # Without it the authenticator denies them at the callback
+        # (`login_denied_unknown_person`) and every cross-tenant assertion
+        # fails at the login step instead of at the thing it means to test.
         n_persons += seed_persons(cur, TENANT_OTHER, other_roster)
+        n_login_id += seed_login_ids(cur, TENANT_OTHER, other_roster)
         n_names += seed_person_names(cur, TENANT_OTHER, other_roster)
         n_acct += seed_account_person_map(cur, TENANT_OTHER, other_roster)
 
