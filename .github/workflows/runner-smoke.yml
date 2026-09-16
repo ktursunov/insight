@@ -1,5 +1,8 @@
 name: runner-smoke
-on: {workflow_dispatch: {}}
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [runner-smoke]
 jobs:
   host:
     runs-on: [self-hosted, linux, ARM64, insight-laptop]
