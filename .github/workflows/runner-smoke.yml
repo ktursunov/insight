@@ -1,0 +1,15 @@
+name: runner-smoke
+on: {workflow_dispatch: {}}
+jobs:
+  host:
+    runs-on: [self-hosted, linux, ARM64, insight-laptop]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: uname -a; nproc; free -g | head -2; docker version --format '{{.Server.Version}}'; git rev-parse --short HEAD
+  amd64-container:
+    runs-on: [self-hosted, linux, ARM64, insight-laptop]
+    timeout-minutes: 5
+    container: ubuntu:24.04
+    steps:
+      - run: uname -m; cat /etc/os-release | head -2
