@@ -1,0 +1,28 @@
+name: CPU probe
+
+on:
+  push:
+    branches: [cpu-probe]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, insight]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Single-core benchmark
+        run: |
+          #!/bin/bash
+          echo "PROBE cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p')"
+          echo "PROBE nproc=$(nproc)"
+          echo "PROBE flags=$(grep -m1 -o -w -E 'avx2|avx512f|sha_ni|vaes' /proc/cpuinfo | sort -u | tr '\n' ' ')"
+          for i in 1 2 3; do
+            echo "PROBE python_s=$(python3 -c 'import time
+          t=time.perf_counter(); s=0
+          for i in range(20_000_000): s+=i*i
+          print(round(time.perf_counter()-t,2))')"
+          done
+          echo "PROBE sha256_1k=$(openssl speed -seconds 3 -bytes 1024 sha256 2>/dev/null | awk '/^sha256/{print $NF}')"
+          echo "PROBE done"
