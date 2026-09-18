@@ -1,0 +1,48 @@
+name: Self-hosted smoke
+
+on:
+  push:
+    branches: [ci/self-hosted-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: insight
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Machine
+        run: |
+          set -euo pipefail
+          nproc
+          free -g | head -2
+          df -h /var/lib/docker /home/runner | tail -2
+
+      - name: Toolchain the heavy workflows expect
+        run: |
+          set -euo pipefail
+          docker --version
+          docker compose version
+          protoc --version
+          cmake --version | head -1
+          jq --version
+          sudo -n true && echo "passwordless sudo: ok"
+
+      - name: Docker actually runs a container
+        run: docker run --rm alpine:3 sh -c 'echo container-ok'
+
+      - name: ClickHouse boots, which is what the real suites need
+        run: |
+          set -euo pipefail
+          docker run -d --name ch -e CLICKHOUSE_PASSWORD=smoke -p 8123:8123 clickhouse/clickhouse-server:24.8
+          for i in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:8123/" -u default:smoke --data-binary "SELECT 1" && break
+            sleep 2
+          done
+          curl -sf "http://127.0.0.1:8123/" -u default:smoke --data-binary "SELECT version()"
+          docker rm -f ch
